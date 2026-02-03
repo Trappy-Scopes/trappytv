@@ -1,2 +1,4 @@
 # trappytv
-Video and data streaming application
+
+
+Viewer for Trappy-Scopes tracked cell data.
