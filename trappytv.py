@@ -33,7 +33,7 @@ class TrappyTV:
             width=width,
             height=height,
             title=f"trappytv — split:{self.split_no}",
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save,hover",
+            tools="box_select, lasso_select, pan, box_zoom, wheel_zoom, reset, save, hover",
             x_axis_label=self.x_init,
             y_axis_label=self.y_init,
             output_backend="webgl"
@@ -42,7 +42,7 @@ class TrappyTV:
         self.fig2 = figure(
             width=figs_width,
             height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save,hover",
+            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
             x_axis_label="gframe_",
             y_axis_label="speed",
             output_backend="webgl"
@@ -51,7 +51,7 @@ class TrappyTV:
         self.fig3 = figure(
             width=figs_width,
             height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save,hover",
+            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
             x_axis_label="gframe_",
             y_axis_label="signal",
             output_backend="webgl"
@@ -60,7 +60,7 @@ class TrappyTV:
         self.fig4 = figure(
             width=figs_width,
             height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save,hover",
+            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
             x_axis_label="gframe_",
             y_axis_label="temp",
             output_backend="webgl"
@@ -211,8 +211,13 @@ class TrappyTV:
         self.line.nonselection_glyph = None
         self.line.level = "underlay"
         self.fig.add_tools(self.hover)
-        
-        
+
+
+        ### Lock Aspect Ratio -- Lock all aspect ratios to the same ratio
+        for t in self.fig.tools:
+            if hasattr(t, "match_aspect"):
+                t.match_aspect = True
+
         self.cont_selection_callback = CustomJS(args=dict(src=self.source, pad=10), code="""
             const inds = [...src.selected.indices].sort((a, b) => a - b);
             if (inds.length === 0) return;
@@ -326,14 +331,19 @@ class TrappyTV:
         #self.color_bar = ColorBar(color_mapper=self.color_mapper, padding=0)
         #self.fig.add_layout(self.color_bar, "right")
     
-    def render_sides(self):
-        self.fig2.title = "speed"
-        self.fig2.line(source=self.source,
-                       x="gframe_",
-                       y="speed",
+
+
+    def render_sides_all_lines(self):
+        self.fig2.title.text = "speed"
+        gframe_ = self.df.gframe_
+        
+        speed_ = self.df["speed"]
+        self.fig2.line(x=gframe_,
+                       y=speed_,
                        color="gray",
                        alpha=0.2,
-                       line_width=2)
+                       line_width=2,
+                       level="underlay")
         self.fig2.scatter(source=self.source,
                        x="gframe_",
                        y="speed",
@@ -342,13 +352,14 @@ class TrappyTV:
                        alpha=0.4,
                        nonselection_alpha=0.0)
         
-        self.fig3.title = "signal"
-        self.fig3.line(source=self.source,
-                       x="gframe_",
-                       y="signal",
+        self.fig3.title.text = "signal"
+        signal_ = self.df["signal"]
+        self.fig3.line(x=gframe_,
+                       y=signal_,
                        color="gray",
                        alpha=0.2,
-                       line_width=3)
+                       line_width=3,
+                       level="underlay")
         self.fig3.scatter(source=self.source,
                        x="gframe_",
                        y="signal",
@@ -358,13 +369,62 @@ class TrappyTV:
                        nonselection_alpha=0.0)
         
         
-        self.fig4.title = "temp"
+        self.fig4.title.text = "temp"
+        temp_ = self.df["temp"]
+        self.fig4.line(x=gframe_,
+                       y=temp_,
+                       color="gray",
+                       alpha=0.2,
+                       line_width=3,
+                       level="underlay")
+        self.fig4.scatter(source=self.source,
+                       x="gframe_",
+                       y="temp",
+                       color=transform("gframe_", self.color_mapper),
+                       size=3,
+                       alpha=0.4,
+                       nonselection_alpha=0.0)
+
+    
+    def render_sides_source(self):
+        self.fig2.title.text = "speed"
+        self.fig2.line(source=self.source,
+                       x="gframe_",
+                       y="speed",
+                       color="gray",
+                       alpha=0.2,
+                       line_width=1)
+        self.fig2.scatter(source=self.source,
+                       x="gframe_",
+                       y="speed",
+                       color=transform("gframe_", self.color_mapper),
+                       size=3,
+                       alpha=0.4,
+                       nonselection_alpha=0.0)
+        
+        self.fig3.title.text = "signal"
+        self.fig3.line(source=self.source,
+                       x="gframe_",
+                       y="signal",
+                       color="gray",
+                       alpha=0.2,
+                       line_width=1)
+        self.fig3.scatter(source=self.source,
+                       x="gframe_",
+                       y="signal",
+                       color=transform("gframe_", self.color_mapper),
+                       size=3,
+                       alpha=0.4,
+                       nonselection_alpha=0.0)
+        
+        
+        self.fig4.title.text = "temp"
         self.fig4.line(source=self.source,
                        x="gframe_",
                        y="temp",
                        color="gray",
                        alpha=0.2,
-                       line_width=3)
+                       line_width=1)
         self.fig4.scatter(source=self.source,
                        x="gframe_",
                        y="temp",
@@ -405,7 +465,7 @@ class TrappyTV:
             legend_label="Points",
             nonselection_alpha=0.0
         )
-        self.render_sides()
+        self.render_sides_source()
         self.__render_interaction__()
         show(self.layout)
         
@@ -443,9 +503,9 @@ class TrappyTV:
             legend_label="Points",
             nonselection_alpha=0.0
         )
-        self.fig.title = f"trappytv :: Cell: {self.scopeid} :: Full-view – Sampling: #{sample}"
+        self.fig.title.text = f"trappytv :: Cell: {self.scopeid} :: Full-view – Sampling: #{sample}"
         self.__render_interaction__()
-        self.render_sides()
+        self.render_sides_all_lines()
         show(self.layout)
         
         
