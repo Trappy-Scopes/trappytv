@@ -1,3 +1,6 @@
+from typing import Any
+
+
 from bokeh.io import output_notebook, show
 from bokeh.plotting import figure
 from bokeh.models import ColumnDataSource, Slider, Select, HoverTool, CustomJS, ImageURL, LinearColorMapper, LogColorMapper
@@ -14,8 +17,50 @@ output_notebook()
 
 
 class TrappyTV:
-    def __init__(self, cell, width=1000, height=1000, figs_width=140*4, figs_height=80*4):
-        
+    def __init__(self, cell, width=1000, height=1000, figs_width=140*5, figs_height=None):
+        """
+        TrappyTV is an interactive Bokeh-based visualization widget for cell tracking data.
+
+        Parameters
+        ----------
+        cell : object
+            A data container object that provides at least a `dfs["tracks"]` DataFrame with a 'gframe' column, 
+            and a `scopeid` attribute for labeling.
+        width : int, optional
+            Width of the main plot in pixels (default: 1000).
+        height : int, optional
+            Height of the main plot in pixels (default: 1000).
+        figs_width : int, optional
+            Width of the side plots in pixels (default: 560).
+        figs_height : int or None, optional
+            Height of the side plots in pixels (default: height/3).
+
+        Attributes
+        ----------
+        df : pandas.DataFrame
+            Internal copy of the tracking data, with 'gframe' renamed to 'gframe_'.
+        scopeid : str
+            Identifier for the current cell's scope.
+        source : bokeh.models.ColumnDataSource
+            Data source for the rendered scatter plots, typically for the selected split.
+        split_no : int
+            Currently displayed split.
+        x_init, y_init : str
+            Columns to use for initial x and y axes in the main plot.
+        fig, fig2, fig3, fig4 : bokeh.plotting.Figure
+            Main and side figures for trajectory and feature visualization.
+        layout : bokeh.layouts.row
+            Complete layout holding all widgets and plots.
+        color_mapper : bokeh.models.LinearColorMapper
+            Used for coloring scatter points by gframe_.
+        logo : bokeh.models.ImageURL
+            Custom logo image shown in main plot.
+
+        Notes
+        -----
+        - The widget allows selection of splits, subsetting, zooming, and inspection of speed/signal/temp over time.
+        - Use `show()` to display a single split, or `view_all()` to view the entire trajectory subsampled.
+        """
         
         ### Keep a copy of the whole data-frame.
         self.df = cell.dfs["tracks"].rename(columns={"gframe":"gframe_"})
@@ -39,6 +84,9 @@ class TrappyTV:
             output_backend="webgl"
         )
     
+        if figs_height is None:
+            figs_height = int(height/3)
+
         self.fig2 = figure(
             width=figs_width,
             height=figs_height,
@@ -66,7 +114,7 @@ class TrappyTV:
             output_backend="webgl"
         )
         
-        
+        self.other_scatters = [] ## Stores other scatter plots of aux figures.  
 
         ## Plotting objects
         
@@ -105,18 +153,23 @@ class TrappyTV:
         )
 
         self.size_slider = Slider(
-            start=0.01, end=30, value=0.1, step=0.1,
+            start=0.001, end=20, value=0.1, step=0.1,
             title="Size", width=250
         )
 
 
 
         style_callback = CustomJS(
-            args=dict(scatter=self.scatter, alpha_slider=self.alpha_slider, size_slider=self.size_slider),
+            args=dict[str, list[list]](scatter=self.scatter, other_scatters=self.other_scatters, alpha_slider=self.alpha_slider, size_slider=self.size_slider),
             code="""
             scatter.glyph.size = size_slider.value;
             scatter.glyph.fill_alpha = alpha_slider.value;
             scatter.change.emit();
+            for (let i = 0; i < other_scatters.length; i++) {
+            other_scatters[i].glyph.setv({
+                size: size_slider.value,
+                fill_alpha: alpha_slider.value})
+            }
             """
         )
 
@@ -321,7 +374,7 @@ class TrappyTV:
                             ),
                             # Right column: fig2 stacked over fig3
                             column(
-                                Spacer(width=250*4, height=125),
+                                Spacer(width=250*4, height=105),
                                 self.fig2,
                                 self.fig3,
                                 self.fig4
@@ -334,23 +387,25 @@ class TrappyTV:
 
 
     def render_sides_all_lines(self):
+        """"""
         self.fig2.title.text = "speed"
         gframe_ = self.df.gframe_
         
         speed_ = self.df["speed"]
+        self.other_scatters = []
         self.fig2.line(x=gframe_,
                        y=speed_,
                        color="gray",
                        alpha=0.2,
                        line_width=2,
                        level="underlay")
-        self.fig2.scatter(source=self.source,
+        self.other_scatters.append(self.fig2.scatter(source=self.source,
                        x="gframe_",
                        y="speed",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
+                       nonselection_alpha=0.0))
         
         self.fig3.title.text = "signal"
         signal_ = self.df["signal"]
@@ -360,13 +415,13 @@ class TrappyTV:
                        alpha=0.2,
                        line_width=3,
                        level="underlay")
-        self.fig3.scatter(source=self.source,
+        self.other_scatters.append(self.fig3.scatter(source=self.source,
                        x="gframe_",
                        y="signal",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
+                       nonselection_alpha=0.0))
         
         
         self.fig4.title.text = "temp"
@@ -377,30 +432,31 @@ class TrappyTV:
                        alpha=0.2,
                        line_width=3,
                        level="underlay")
-        self.fig4.scatter(source=self.source,
+        self.other_scatters.append(self.fig4.scatter(source=self.source,
                        x="gframe_",
                        y="temp",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
+                       nonselection_alpha=0.0))
 
     
     def render_sides_source(self):
         self.fig2.title.text = "speed"
+        self.other_scatters = []
         self.fig2.line(source=self.source,
                        x="gframe_",
                        y="speed",
                        color="gray",
                        alpha=0.2,
                        line_width=1)
-        self.fig2.scatter(source=self.source,
+        self.other_scatters.append(self.fig2.scatter(source=self.source,
                        x="gframe_",
                        y="speed",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
+                       nonselection_alpha=0.0))
         
         self.fig3.title.text = "signal"
         self.fig3.line(source=self.source,
@@ -409,13 +465,13 @@ class TrappyTV:
                        color="gray",
                        alpha=0.2,
                        line_width=1)
-        self.fig3.scatter(source=self.source,
+        self.other_scatters.append(self.fig3.scatter(source=self.source,
                        x="gframe_",
                        y="signal",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
+                       nonselection_alpha=0.0))
         
         
         self.fig4.title.text = "temp"
@@ -425,14 +481,14 @@ class TrappyTV:
                        color="gray",
                        alpha=0.2,
                        line_width=1)
-        self.fig4.scatter(source=self.source,
+        self.other_scatters.append(self.fig4.scatter(source=self.source,
                        x="gframe_",
                        y="temp",
                        color=transform("gframe_", self.color_mapper),
                        size=3,
                        alpha=0.4,
-                       nonselection_alpha=0.0)
-    
+                       nonselection_alpha=0.0))
+        print(self.other_scatters)
     
     def show(self, split_no=0, render_circle=False, xycols=["x_unrefined", "y_unrefined"], line_alpha=0.4, line_color="gray"):
         
@@ -506,6 +562,7 @@ class TrappyTV:
         self.fig.title.text = f"trappytv :: Cell: {self.scopeid} :: Full-view – Sampling: #{sample}"
         self.__render_interaction__()
         self.render_sides_all_lines()
+        #print(self.other_scatters)
         show(self.layout)
         
         
