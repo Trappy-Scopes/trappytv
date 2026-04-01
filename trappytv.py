@@ -495,7 +495,7 @@ class TrappyTV:
         self.fig.renderers.remove(self.scatter)
         self.fig.renderers.remove(self.line)
         self.split_no = split_no
-        self.source = ColumnDataSource(self.df[self.df.split == split_no])
+        self.source.data = ColumnDataSource.from_df(self.df[self.df.split == split_no])
         
         
         # Line ---- Render lines --> all lines
@@ -548,7 +548,7 @@ class TrappyTV:
         )
         
         ## Render scatters
-        self.source = ColumnDataSource(self.df[::sample])
+        self.source.data = ColumnDataSource.from_df(self.df[::sample])
         self.color_mapper = LinearColorMapper(palette=Viridis256, low=self.df["gframe_"].min(), high=self.df["gframe_"].max())
         self.scatter = self.fig.scatter(
             xycols[0], xycols[1],
