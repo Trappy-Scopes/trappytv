@@ -1,0 +1,80 @@
+# mkdocs.yml
+site_name: Trappy-Scopes/trappytv
+site_url: https://trappy-scopes.github.io/trappytv
+repo_url: https://github.com/Trappy-Scopes/trappytv
+
+nav:
+  - Home: index.md
+  - All Trappy-Scopes Projects: https://trappy-scopes.github.io
+
+
+plugins:
+  - search
+  - blogging
+  - external-markdown
+  - mermaid2
+
+#  - autorefs
+#  - redirects
+#      scripts:
+#        - generate_docs.py
+
+extra:
+  homepage: https://trappy-scopes.github.io/trappyscopes/
+
+theme:
+  logo: assets/tsicon.png
+  name: material
+  primary: trappytheme
+  palette:
+    # Dark mode as default
+    - scheme: slate
+      primary: cyan
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+    # Light mode option
+    - scheme: default
+      primary: cyan
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - toc.integrate
+    - search.highlight
+    - content.code.annotate
+    - content.code.copy
+
+extra_css:
+  - stylesheets/extra.css
+
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.superfences:
+      # make exceptions to highlighting of code:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.superfences:
+      custom_fences:
+        - name: model-viewer
+          class: model-viewer
+          format: !!python/name:pymdownx.superfences.fence_code_format
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/es-module-shims@1.8.3/dist/es-module-shims.min.js
+  - https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js
+  - https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js
