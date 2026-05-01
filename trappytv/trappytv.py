@@ -13,8 +13,7 @@ from bokeh.transform import transform
 from bokeh.layouts import gridplot, row, column
 from bokeh.models import Spacer
 from bokeh.models import CDSView, ColumnDataSource, GroupFilter
-
-
+from bokeh.models import CheckboxButtonGroup, CustomJS
 
 
 
@@ -25,7 +24,7 @@ class TrappyTV:
         self.view_filter = CDSView(filter=GroupFilter(column_name="split", group=self.split_no))
         return self.view_filter
 
-    def __init__(self, cell, width=1000, height=1000, figs_width=140*5, figs_height=None):
+    def __init__(self, cell, width=1000, height=1000, figs_width=140*5, figs_height=None, filtered_columns={}):
         """
         TrappyTV is an interactive Bokeh-based visualization widget for cell tracking data.
 
@@ -126,7 +125,7 @@ class TrappyTV:
         )
         
         self.other_scatters = [] ## Stores other scatter plots of aux figures.  
-
+        self.filtered_columns = filtered_columns
         ## Plotting objects
         
         # Scatter
@@ -425,6 +424,12 @@ class TrappyTV:
 
         self.fig.add_glyph(self.logo)
 
+
+        ## Checkboxes
+        self.checkboxes = None
+        if self.filtered_columns: 
+            self.checkboxes = CheckboxButtonGroup(labels=list(self.filtered_columns.keys()), active=[0, 1])
+
         # ------------------------------------------------------------------
         # Layout
         # ------------------------------------------------------------------
@@ -432,12 +437,14 @@ class TrappyTV:
                             # Left column: widgets + main figure
                             column(
                                 row(self.x_select, self.y_select, self.color_select),  # dropdowns
-                                row(self.alpha_slider, self.size_slider, self.split_slider),             # sliders
-                                self.fig                                              # main figure
+                                row(self.alpha_slider, self.size_slider, self.split_slider),         # sliders
+                                row(self.checkboxes),                                                # Checkboxes if needed
+                                self.fig                                                             # main figure
                             ),
                             # Right column: fig2 stacked over fig3
                             column(
-                                Spacer(width=250*4, height=105),
+                                Spacer(width=250*4, height=100),
+                                (Spacer(width=250*4, height=40) if self.filtered_columns else None),
                                 self.fig2,
                                 self.fig3,
                                 self.fig4
