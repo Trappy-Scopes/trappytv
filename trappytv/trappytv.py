@@ -1,738 +1,749 @@
-from copyreg import dispatch_table
-from typing import Any
+"""
+trappytv.py
+───────────
+TrappyTV: the public Bokeh visualisation widget for Trappy-Scopes trajectory data.
 
+Inherits infrastructure from TrappyCore and adds:
+- Configurable hover tooltip system (hover_builder / hover_columns)
+- Configurable side-panel rendering (side_cols)
+- Filtered-column overlays with checkbox visibility control (view_split only)
+- Three view modes: view_split, view_all, view_ensemble
 
-from bokeh.io import output_notebook, show
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, Slider, Select, HoverTool, CustomJS, ImageURL, LinearColorMapper, LogColorMapper
-from bokeh.core.properties import value
-from bokeh.transform import linear_cmap, factor_cmap
-from bokeh.palettes import Viridis256
-from bokeh.models import ColorBar
+Usage
+-----
+    from trappytv import TrappyTV
+
+    tv = TrappyTV(cell)
+    tv.view_split(split_no=0)
+"""
+
+from __future__ import annotations
+
+from typing import Callable, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+from bokeh.models import ColumnDataSource, CustomJS, HoverTool
+from bokeh.palettes import Category20, Turbo256
 from bokeh.transform import transform
-from bokeh.layouts import gridplot, row, column
-from bokeh.models import Spacer
-from bokeh.models import CDSView, ColumnDataSource, GroupFilter
-from bokeh.models import CheckboxButtonGroup, CustomJS
+
+from .trappycore import TrappyCore, _DEFAULT_SIDE_COLS
+
+HoverBuilder = Callable[[Sequence[str]], Sequence[Tuple[str, str]]]
+
+# ── Overlay palette / markers ─────────────────────────────────────────────────
+# Colours chosen to contrast clearly with the main Viridis scatter.
+_OVERLAY_PALETTE = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00"]
+_OVERLAY_MARKERS = ["square", "triangle", "diamond", "hex", "star"]
 
 
+class TrappyTV(TrappyCore):
+    """
+    Interactive Bokeh visualisation widget for Trappy-Scopes trajectory data.
 
-class TrappyTV:
+    Parameters
+    ----------
+    cell : object
+        Cell data container (see TrappyCore for details).
+    width, height : int
+        Main figure pixel dimensions.
+    figs_width, figs_height : int
+        Side figure pixel dimensions.
+    default_xycols : sequence of str
+        Default [x_col, y_col] used when xycols is not passed to a view method.
+    filtered_columns : dict
+        Checkbox-controlled overlay columns: {label: [x_col, y_col]}.
+        In view_split, each entry renders a line + scatter overlay on the main
+        figure; checkboxes toggle their visibility. Disabled in other view modes.
+    side_cols : sequence of (str, str)
+        Side-panel (data_column, display_label) pairs.
+    hover_builder : callable, optional
+        Function(columns) -> list of (label, spec) tooltip pairs.
+    hover_columns : sequence of str, optional
+        Column names passed to hover_builder.
 
-    def get_view_filter(self):
-        """Genertaes an appropriate split view filter"""
-        self.view_filter = CDSView(filter=GroupFilter(column_name="split", group=self.split_no))
-        return self.view_filter
+    View modes
+    ----------
+    view_split(split_no, ...)    Single split with overlays; split slider is live.
+    view_all(sample, ...)        Full trajectory; sampled interactive scatter.
+    view_ensemble(...)           Multi-particle ensemble; per-split speed panel.
+    """
 
-    def __init__(self, cell, width=1000, height=1000, figs_width=140*5, figs_height=None, filtered_columns={}):
+    def __init__(
+        self,
+        cell,
+        width: int = 1000,
+        height: int = 1000,
+        figs_width: int = 140 * 5,
+        figs_height: Optional[int] = None,
+        default_xycols: Sequence[str] = ("x_unrefined", "y_unrefined"),
+        filtered_columns: dict = {
+            "filtered":      ["xf",     "yf"    ],
+            "denoised":      ["xf_11Hz", "yf_11Hz"],
+            "anti-aliased":  ["xf_3Hz", "yf_3Hz"],
+        },
+        side_cols: Sequence[Tuple[str, str]] = _DEFAULT_SIDE_COLS,
+        hover_builder: Optional[HoverBuilder] = None,
+        hover_columns: Optional[Sequence[str]] = None,
+    ) -> None:
+        super().__init__(
+            cell=cell,
+            width=width,
+            height=height,
+            figs_width=figs_width,
+            figs_height=figs_height,
+            filtered_columns=filtered_columns,
+            side_cols=side_cols,
+        )
+        self.default_xycols: list[str] = list(default_xycols)
+        self.hover_builder: HoverBuilder = hover_builder or self._default_hover_builder
+        self.hover_columns: Optional[tuple] = (
+            tuple(hover_columns) if hover_columns is not None else None
+        )
+        self._build_hover()
+
+        # Overlay state -- populated by _render_filtered_overlays (view_split only),
+        # cleared at the start of every view call via _clear_renderers override.
+        self.overlay_renderers: list = []  # list of [line, scatter] pairs
+        self.overlay_sources:   list = []  # one ColumnDataSource per valid overlay
+
+    # ── Overlay clear / render / wire ─────────────────────────────────────────
+
+    def _clear_renderers(self) -> None:
         """
-        TrappyTV is an interactive Bokeh-based visualization widget for cell tracking data.
+        Override: clear overlays first, then delegate to the base implementation
+        (which removes self.scatter / self.line and wipes the legend).
+        """
+        self._clear_overlays()
+        super()._clear_renderers()
+
+    def _clear_overlays(self) -> None:
+        """Remove all overlay renderers from self.fig and reset overlay state."""
+        for pair in self.overlay_renderers:
+            for renderer in pair:
+                if renderer in self.fig.renderers:
+                    self.fig.renderers.remove(renderer)
+        self.overlay_renderers = []
+        self.overlay_sources   = []
+
+    def _render_filtered_overlays(self, split_df) -> list:
+        """
+        Render one line + scatter overlay per valid entry in self.filtered_columns.
+
+        'Valid' means both x_col and y_col exist in self.df. Invalid entries are
+        silently skipped; the checkbox labels are updated to match.
 
         Parameters
         ----------
-        cell : object
-            A data container object that provides at least a `dfs["tracks"]` DataFrame with a 'gframe' column, 
-            and a `scopeid` attribute for labeling.
-        width : int, optional
-            Width of the main plot in pixels (default: 1000).
-        height : int, optional
-            Height of the main plot in pixels (default: 1000).
-        figs_width : int, optional
-            Width of the side plots in pixels (default: 560).
-        figs_height : int or None, optional
-            Height of the side plots in pixels (default: height/3).
+        split_df : DataFrame
+            The initial split's rows; used to populate the overlay sources.
 
-        Attributes
-        ----------
-        df : pandas.DataFrame
-            Internal copy of the tracking data, with 'gframe' renamed to 'gframe_'.
-        scopeid : str
-            Identifier for the current cell's scope.
-        source : bokeh.models.ColumnDataSource
-            Data source for the rendered scatter plots, typically for the selected split.
-        split_no : int
-            Currently displayed split.
-        x_init, y_init : str
-            Columns to use for initial x and y axes in the main plot.
-        fig, fig2, fig3, fig4 : bokeh.plotting.Figure
-            Main and side figures for trajectory and feature visualization.
-        layout : bokeh.layouts.row
-            Complete layout holding all widgets and plots.
-        color_mapper : bokeh.models.LinearColorMapper
-            Used for coloring scatter points by gframe_.
-        logo : bokeh.models.ImageURL
-            Custom logo image shown in main plot.
-
-        Notes
-        -----
-        - The widget allows selection of splits, subsetting, zooming, and inspection of speed/signal/temp over time.
-        - Use `show()` to display a single split, or `view_all()` to view the entire trajectory subsampled.
+        Returns
+        -------
+        valid : list of (label, x_col, y_col)
+            Only the entries that were actually rendered.
         """
-        
-        ### Keep a copy of the whole data-frame.
-        self.df = cell.dfs["tracks"].rename(columns={"gframe":"gframe_"})
-        self.scopeid = cell.scopeid
-        
-        ## Initial Render is 
-        self.source = ColumnDataSource(self.df[self.df.split == 0])
-        self.split_no = 0
-        self.split_values = sorted(self.df["split"].dropna().unique().tolist()) if "split" in self.df.columns else [0]
-        self.view_filter_all_splits = CDSView(filter=GroupFilter(column_name="split", group=self.split_values)) ## Select all splits
-        self.view_filter = self.get_view_filter() ## Get 0th view filter.
+        valid = [
+            (label, cols[0], cols[1])
+            for label, cols in self.filtered_columns.items()
+            if cols[0] in self.columns and cols[1] in self.columns
+        ]
 
-        # Initial columns --> Default initalisation
-        self.x_init = "x_unrefined"
-        self.y_init = "y_unrefined"
-  
-        self.fig = figure(
-            width=width,
-            height=height,
-            title=f"trappytv — split:{self.split_no}",
-            tools="box_select, lasso_select, pan, box_zoom, wheel_zoom, reset, save, hover",
-            x_axis_label=self.x_init,
-            y_axis_label=self.y_init,
-            output_backend="webgl"
-        )
-    
-        if figs_height is None:
-            figs_height = int(height/3)
+        # Keep checkboxes in sync with valid overlays only.
+        if self.checkboxes is not None:
+            self.checkboxes.labels = [v[0] for v in valid]
+            self.checkboxes.active = list(range(len(valid)))
 
-        self.fig2 = figure(
-            width=figs_width,
-            height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
-            x_axis_label="gframe_",
-            y_axis_label="speed",
-            output_backend="webgl"
-        )
-        
-        self.fig3 = figure(
-            width=figs_width,
-            height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
-            x_axis_label="gframe_",
-            y_axis_label="signal",
-            output_backend="webgl"
-        )
-        
-        self.fig4 = figure(
-            width=figs_width,
-            height=figs_height,
-            tools="box_select, lasso_select, pan,box_zoom,wheel_zoom,reset,save",
-            x_axis_label="gframe_",
-            y_axis_label="temp",
-            output_backend="webgl"
-        )
-        
-        self.other_scatters = [] ## Stores other scatter plots of aux figures.  
-        self.filtered_columns = filtered_columns
-        ## Plotting objects
-        
-        # Scatter
-        # Some datasets (e.g. ensemble experiments) may not have `gframe`.
-        # Keep the widget functional in that case by skipping gframe-based coloring.
-        self.color_mapper = None
-        if "gframe_" in self.df.columns:
-            self.color_mapper = linear_cmap(
-                field_name="gframe_",
-                palette=Viridis256,
-                low=self.df["gframe_"].min(),
-                high=self.df["gframe_"].max(),
+        self.overlay_renderers = []
+        self.overlay_sources   = []
+
+        for i, (label, x_col, y_col) in enumerate(valid):
+            color  = _OVERLAY_PALETTE[i % len(_OVERLAY_PALETTE)]
+            marker = _OVERLAY_MARKERS[i % len(_OVERLAY_MARKERS)]
+
+            source = ColumnDataSource({
+                x_col: split_df[x_col].tolist(),
+                y_col: split_df[y_col].tolist(),
+            })
+            self.overlay_sources.append(source)
+
+            line = self.fig.line(
+                x=x_col, y=y_col, source=source,
+                color=color, alpha=0.5, line_width=1,
+                legend_label=label,
             )
-        self.scatter = self.fig.scatter(
-            self.x_init, self.y_init,
-            source=self.source,
-            size=1,
-            alpha=0.6,
-            color="blue",
-            legend_label="Points"
-        )
+            scatter = self.fig.scatter(
+                x=x_col, y=y_col, source=source,
+                color=color, marker=marker, size=3, alpha=0.5,
+                legend_label=label,
+                nonselection_alpha=0.0,
+            )
+            # Overlays are decorative -- don't interfere with main selection.
+            # Lines are also non-interactive.
+            line.nonselection_glyph    = None
+            line.level                 = "underlay"
+            line.hover_glyph           = None
+            scatter.nonselection_glyph = None
+            scatter.level              = "underlay"
+            scatter.hover_glyph        = None
+            self.overlay_renderers.append([line, scatter])
 
-        # Line
-        self.line = self.fig.line(
-            self.x_init, self.y_init,
-            source=self.source,
-            color="gray",
-            alpha=0.4,
-            line_width=2,
-            legend_label="Path"
-        )
-        
-        self.__render_interaction__()
-        
-        
-    def __render_interaction__(self, frame_col="gframe_"):
-        
-        # ------------------------------------------------------------------
-        # Sliders
-        # ------------------------------------------------------------------
-        self.alpha_slider = Slider(
-            start=0.0, end=1.0, value=0.4, step=0.05,
-            title="Alpha", width=250
-        )
+        return valid
 
-        self.size_slider = Slider(
-            start=0.001, end=20, value=0.1, step=0.1,
-            title="Size", width=250
-        )
+    def _wire_checkboxes(self) -> None:
+        """
+        Wire the CheckboxButtonGroup to toggle overlay visibility.
+        Called from _finalize when wire_checkboxes=True (view_split only).
+        Clears any previously attached callbacks first.
+        """
+        if self.checkboxes is None or not self.overlay_renderers:
+            return
 
-        self.split_slider = Slider(
-            start=0,
-            end=max(len(self.split_values) - 1, 0),
-            value=self.split_values[self.split_no] if self.split_no in self.split_values else 0,
-            step=1,
-            title="Split no",
-            width=250
-        )
+        self.checkboxes.js_property_callbacks.pop("change:active", None)
 
-        style_callback = CustomJS(
-            args=dict[str, list[list]](scatter=self.scatter, other_scatters=self.other_scatters, alpha_slider=self.alpha_slider, size_slider=self.size_slider),
+        # Flat renderer list: [line0, scatter0, line1, scatter1, ...]
+        flat_renderers = [r for pair in self.overlay_renderers for r in pair]
+
+        cb = CustomJS(
+            args=dict(renderers=flat_renderers),
             code="""
-            scatter.glyph.size = size_slider.value;
-            scatter.glyph.fill_alpha = alpha_slider.value;
-            scatter.change.emit();
-            for (let i = 0; i < other_scatters.length; i++) {
-            other_scatters[i].glyph.setv({
-                size: size_slider.value,
-                fill_alpha: alpha_slider.value})
+            const active = new Set(cb_obj.active);
+            const n = Math.floor(renderers.length / 2);
+            for (let i = 0; i < n; i++) {
+                const vis          = active.has(i);
+                renderers[2*i].visible   = vis;   // line
+                renderers[2*i+1].visible = vis;   // scatter
             }
-            """
+            """,
         )
+        self.checkboxes.js_on_change("active", cb)
 
-        self.alpha_slider.js_on_change("value", style_callback)
-        self.size_slider.js_on_change("value", style_callback)
+    # ── Hover system ──────────────────────────────────────────────────────────
 
-        #elf.split_callback = CustomJS(
-        #    args=dict(
-        #        source=self.source,
-        #        fig=self.fig,
-        #        split_values=self.split_values,
-        #        view=self.get_view_filter()
-        #    ),
-        #    code="""
-        #    const split_idx = Math.round(cb_obj.value);
-        #    const split_no = split_values[split_idx];
-        #    source.selected.indices = [];
-        #    source.change.emit();
-        #    fig.title.text = `trappytv — split:${split_no}`;
-        #    """
-        #)
-        #self.split_slider.js_on_change("value", self.split_callback)
+    def set_hover_columns(self, hover_columns: Sequence[str], refresh: bool = True) -> None:
+        """Replace the columns passed to hover_builder."""
+        self.hover_columns = tuple(hover_columns)
+        if refresh:
+            self._apply_hover()
 
-        # ------------------------------------------------------------------
-        # Dropdowns
-        # ------------------------------------------------------------------
-        self.columns = list(self.df.columns)
+    def set_hover_builder(self, hover_builder: HoverBuilder, refresh: bool = True) -> None:
+        """Replace the hover_builder callable."""
+        self.hover_builder = hover_builder
+        if refresh:
+            self._apply_hover()
 
-        self.x_select = Select(
-            title="X column",
-            value=self.x_init,
-            options=self.columns,
-            width=200
-        )
+    def _default_hover_builder(self, hover_columns: Sequence[str]) -> Sequence[Tuple[str, str]]:
+        """
+        Build hover tooltip pairs from column names.
+        If hover_columns is non-empty, only those columns are included.
+        Otherwise a sensible default set is assembled from the dataframe.
+        """
+        if hover_columns:
+            tips = []
+            for col in hover_columns:
+                if col not in self.columns:
+                    continue
+                tips.append((col, "@dt{%F %T}" if col == "dt" else f"@{col}"))
+            return tips
 
-        self.y_select = Select(
-            title="Y column",
-            value=self.y_init,
-            options=self.columns,
-            width=200
-        )
-
-        self.xy_callback = CustomJS(
-            args=dict(
-                source=self.source,
-                scatter=self.scatter,
-                line=self.line,
-                x_select=self.x_select,
-                y_select=self.y_select,
-                p=self.fig
-            ),
-            code="""
-            const x = x_select.value;
-            const y = y_select.value;
-
-            scatter.glyph.x = { field: x };
-            scatter.glyph.y = { field: y };
-
-            line.glyph.x = { field: x };
-            line.glyph.y = { field: y };
-
-            p.xaxis.axis_label = x;
-            p.yaxis.axis_label = y;
-
-            source.change.emit();
-            """
-        )
-
-        self.x_select.js_on_change("value", self.xy_callback)
-        self.y_select.js_on_change("value", self.xy_callback)
-        
-        
-        
-        # gframe-based coloring is optional (some datasets have no `gframe_`).
-        default_color_field = "gframe_" if "gframe_" in self.columns else (self.columns[0] if self.columns else "x")
-        self.color_select = Select(
-            title="Color",
-            value=default_color_field,
-            options=self.columns,
-            width=200,
-            disabled=(self.color_mapper is None),
-        )
-        if self.color_mapper is not None:
-            self.color_callback = CustomJS(
-                args=dict(glyph=self.scatter.glyph, source=self.source, mapper=self.color_mapper),
-                code="""
-                    const field = cb_obj.value;
-                    const data = source.data[field];
-
-                    // Compute min/max
-                    let min = Math.min(...data);
-                    let max = Math.max(...data);
-
-                    // Update mapper
-                    mapper.low = min;
-                    mapper.high = max;
-
-                    // Update glyph color mapping
-                    glyph.fill_color = { field: field, transform: mapper };
-
-                    source.change.emit();
-                """,
-            )
-            self.color_select.js_on_change("value", self.color_callback)
-        
-        ## Clear previous hover tools
-        self.fig.tools = [t for t in self.fig.tools if not isinstance(t, HoverTool)]
-        # Hover fields are dataset-dependent.
-        hover_tooltips = [("split", "@split"), ("(X, Y)", "(@x, @y)")]
-        if "gframe_" in self.columns:
-            hover_tooltips.insert(0, ("gframe_", "@gframe_"))
-        elif "gframe" in self.columns:
-            hover_tooltips.insert(0, ("gframe", "@gframe"))
-
-        if "frame" in self.columns:
-            hover_tooltips.append(("frame", "@frame"))
+        tips: list[Tuple[str, str]] = []
+        for col in ("gframe_", "gframe"):
+            if col in self.columns:
+                tips.append((col, f"@{col}"))
+                break
+        if "split" in self.columns:
+            tips.append(("split", "@split"))
+        if "x" in self.columns and "y" in self.columns:
+            tips.append(("(X, Y)", "(@x, @y)"))
+        for col in ("frame", "particle", "scopeid"):
+            if col in self.columns:
+                tips.append((col, f"@{col}"))
         if "dt" in self.columns:
-            hover_tooltips.append(("dt", "@dt{%F %T}"))
+            tips.append(("dt", "@dt{%F %T}"))
+        return tips
 
+    def _build_hover(self) -> None:
+        """Create a HoverTool and attach it to self.fig."""
+        self.fig.tools = [t for t in self.fig.tools if not isinstance(t, HoverTool)]
+        tips   = list(self.hover_builder(self.hover_columns or ()))
+        has_dt = any(f == "dt" for f, _ in tips)
         self.hover = HoverTool(
-            tooltips=hover_tooltips,
+            tooltips=tips,
+            formatters={"@dt": "datetime"} if has_dt else {},
             renderers=[self.scatter],
         )
-        
-        ## Make the line non-interactive
-        self.line.hover_glyph = None
-        #self.line.selection_glyph = None
-        self.line.nonselection_glyph = None
-        self.line.level = "underlay"
         self.fig.add_tools(self.hover)
 
+    def _apply_hover(self, hover_columns: Optional[Sequence[str]] = None) -> None:
+        """Update the existing HoverTool in place to point at the current self.scatter."""
+        cols   = hover_columns if hover_columns is not None else (self.hover_columns or ())
+        tips   = list(self.hover_builder(cols))
+        has_dt = any(f == "dt" for f, _ in tips)
+        for tool in self.fig.tools:
+            if isinstance(tool, HoverTool):
+                tool.tooltips   = tips
+                tool.formatters = {"@dt": "datetime"} if has_dt else {}
+                tool.renderers  = [self.scatter]
+                return
+        self._build_hover()
 
-        ### Lock Aspect Ratio -- Lock all aspect ratios to the same ratio
-        for t in self.fig.tools:
-            if hasattr(t, "match_aspect"):
-                t.match_aspect = True
+    # ── Side panel rendering ──────────────────────────────────────────────────
 
-        self.cont_selection_callback = CustomJS(args=dict(src=self.source, pad=10), code="""
-            const inds = [...src.selected.indices].sort((a, b) => a - b);
-            if (inds.length === 0) return;
+    def _render_sides(
+        self,
+        source: ColumnDataSource,
+        frame_col: str = "gframe_",
+        *,
+        background_df=None,
+    ) -> None:
+        """
+        Render all side figures from self.side_cols.
 
-            // --- split into continuous runs ---
-            let runs = [];
-            let run = [inds[0]];
+        Parameters
+        ----------
+        source : ColumnDataSource
+            Interactive source linked to the main scatter.
+        frame_col : str
+            Column used as the x-axis on each side panel.
+        background_df : DataFrame, optional
+            When provided, draws a static grey background line spanning all data.
+        """
+        self.other_scatters = []
 
-            for (let i = 1; i < inds.length; i++) {
-                if (inds[i] === inds[i - 1] + 1) {
-                    run.push(inds[i]);
-                } else {
-                    runs.push(run);
-                    run = [inds[i]];
+        for fig, (y_col, label) in zip(self.side_figs, self.side_cols):
+            fig.renderers        = []
+            fig.title.text       = label
+            fig.xaxis.axis_label = frame_col
+            fig.yaxis.axis_label = y_col
+
+            if y_col not in self.df.columns:
+                continue
+
+            if background_df is not None and frame_col in background_df.columns:
+                fig.line(
+                    x=background_df[frame_col], y=background_df[y_col],
+                    color="gray", alpha=0.2, line_width=2, level="underlay",
+                )
+
+            scatter_color = (
+                transform(frame_col, self.color_mapper)
+                if self.color_mapper is not None
+                else "steelblue"
+            )
+            scatter = fig.scatter(
+                source=source,
+                x=frame_col, y=y_col,
+                color=scatter_color, size=3, alpha=0.4,
+                nonselection_alpha=0.0,
+            )
+            self.other_scatters.append(scatter)
+
+    # ── Shared finalise step ──────────────────────────────────────────────────
+
+    def _finalize(
+        self,
+        *,
+        title: Optional[str] = None,
+        hover_columns: Optional[Sequence[str]] = None,
+        disable_split_slider: bool = False,
+        split_callback: Optional[CustomJS] = None,
+        wire_checkboxes: bool = False,
+        disable_checkboxes: bool = False,
+    ) -> None:
+        """
+        Post-render wiring common to all view modes, then display.
+
+        Order: title -> color_select -> hover -> style sliders -> xy selects
+               -> split slider -> raw_checkboxes -> overlay checkboxes -> display.
+
+        Parameters
+        ----------
+        wire_checkboxes : bool
+            True only for view_split: enables and wires the overlay checkbox callbacks.
+        disable_checkboxes : bool
+            True for view_all and view_ensemble: disables the overlay checkbox widget.
+            The raw_checkboxes (Raw line / Raw scatter) are always wired regardless.
+        """
+        if title is not None:
+            self.fig.title.text = title
+
+        if self.color_mapper is not None:
+            self._wire_color_select(self.color_select.value)
+
+        self._apply_hover(hover_columns)
+        self._wire_style_sliders()
+        self._wire_xy_selects()
+
+        self.split_slider.js_property_callbacks.pop("change:value", None)
+        self.split_slider.disabled = disable_split_slider
+        if split_callback is not None:
+            self.split_slider.js_on_change("value", split_callback)
+
+        # Raw line / scatter toggles -- always wired for every view mode.
+        # Reset both to visible first so the widget state matches reality on re-render.
+        self.raw_checkboxes.active = [0, 1]
+        self._wire_raw_checkboxes()
+
+        # Overlay checkboxes -- only wired in view_split; disabled elsewhere.
+        if self.checkboxes is not None:
+            if disable_checkboxes:
+                self.checkboxes.disabled = True
+            else:
+                self.checkboxes.disabled = False
+                if wire_checkboxes:
+                    self._wire_checkboxes()
+
+        self.display()
+
+    # ── View modes ────────────────────────────────────────────────────────────
+
+    def view_split(
+        self,
+        split_no: int = 0,
+        xycols: Optional[Sequence[str]] = None,
+        line_alpha: float = 0.4,
+        line_color: str = "gray",
+        hover_columns: Optional[Sequence[str]] = None,
+    ) -> None:
+        """
+        Render a single split with filtered-column overlays.
+
+        The split slider switches between splits live. Checkboxes toggle the
+        visibility of each filtered-column overlay. Both update without a
+        Python round-trip.
+
+        Parameters
+        ----------
+        split_no : int
+            Index into self.split_values for the initial split to render.
+        xycols : [x_col, y_col], optional
+            Overrides default_xycols.
+        line_alpha, line_color : float, str
+            Appearance of the main trajectory line.
+        hover_columns : sequence of str, optional
+            Overrides self.hover_columns for this call only.
+        """
+        xycols    = list(xycols or self.default_xycols)
+        frame_col = "frame" if "frame" in self.columns else "gframe_"
+
+        # _clear_renderers also calls _clear_overlays and wipes the legend.
+        self._clear_renderers()
+        self.split_no = split_no
+
+        initial_split_val = self.split_values[split_no]
+        initial_df = (
+            self.df[self.df["split"] == initial_split_val]
+            if "split" in self.df.columns
+            else self.df
+        )
+
+        # full_source: all splits -- never mutated; used by the JS split callback.
+        # display_source (self.source): the currently visible split; rewritten by JS.
+        self.full_source = ColumnDataSource(self.df)
+        self.source      = ColumnDataSource(initial_df)
+        self.split_slider.value = split_no
+
+        # ── Main trajectory glyphs ────────────────────────────────────────────
+        color = transform(frame_col, self._make_color_mapper(frame_col))
+        self._render_glyphs(
+            xycols,
+            line_source=self.source,
+            scatter_source=self.source,
+            scatter_color=color,
+            line_alpha=line_alpha,
+            line_color=line_color,
+        )
+
+        # ── Filtered-column overlays ──────────────────────────────────────────
+        valid_overlays = self._render_filtered_overlays(initial_df)
+        overlay_xcols  = [x for _, x, _ in valid_overlays]
+        overlay_ycols  = [y for _, _, y in valid_overlays]
+
+        # ── Side panels ───────────────────────────────────────────────────────
+        self._render_sides(self.source, frame_col=frame_col)
+
+        # ── Split slider callback ─────────────────────────────────────────────
+        # split_values is a Python list serialised into JS as an array.
+        # The slider value is an index (0...N-1); we look up the actual split value.
+        # After filtering the main source, the same filtered dict (nd) is reused
+        # to update every overlay source -- no extra per-overlay loop needed.
+        split_cb = CustomJS(
+            args=dict(
+                full_source=self.full_source,
+                display_source=self.source,
+                split_values=self.split_values,
+                frame_col=frame_col,
+                mapper=self.color_mapper,
+                plot_title=self.fig.title,
+                scopeid=self.scopeid,
+                overlay_sources=self.overlay_sources,
+                overlay_xcols=overlay_xcols,
+                overlay_ycols=overlay_ycols,
+            ),
+            code="""
+            const idx       = Math.round(cb_obj.value);
+            const split_val = split_values[idx];
+
+            // Filter full_source to the selected split.
+            const full = full_source.data;
+            const nd   = {};
+            for (const col of Object.keys(full)) { nd[col] = []; }
+            for (let i = 0; i < full['split'].length; i++) {
+                if (Number(full['split'][i]) === Number(split_val)) {
+                    for (const col of Object.keys(full)) { nd[col].push(full[col][i]); }
                 }
             }
-            runs.push(run);
+            display_source.data = nd;
 
-            // --- keep longest run ---
-            let longest = runs.reduce((a, b) => b.length > a.length ? b : a);
-
-            // --- pad selection ---
-            const n = src.data.x.length;
-            let start = Math.max(0, longest[0] - pad);
-            let end   = Math.min(n - 1, longest[longest.length - 1] + pad);
-
-            let new_inds = [];
-            for (let i = start; i <= end; i++) {
-                new_inds.push(i);
+            // Update color-mapper range to this split's frame extent.
+            const fd = nd[frame_col];
+            if (fd && fd.length > 0) {
+                mapper.low  = Math.min(...fd);
+                mapper.high = Math.max(...fd);
             }
 
-            // --- replace selection ---
-            src.selected.indices = new_inds;
-            src.change.emit();
-        """)
+            // Update each overlay source from the same filtered dict.
+            for (let i = 0; i < overlay_sources.length; i++) {
+                const xc = overlay_xcols[i];
+                const yc = overlay_ycols[i];
+                overlay_sources[i].data = {
+                    [xc]: nd[xc] !== undefined ? nd[xc] : [],
+                    [yc]: nd[yc] !== undefined ? nd[yc] : [],
+                };
+            }
 
-        #self.source.selected.js_on_change("indices", self.cont_selection_callback)
-        
-        
-        
-        self.selection_callback = CustomJS(args=dict(source=self.source, figures=[self.fig2, self.fig3, self.fig4]), 
-                                      code="""
-                                        const inds = source.selected.indices;
-
-                                        if (inds.length === 0) {
-                                            for (let i = 0; i < figures.length; i++) {
-                                                const datax = source.data['x'];
-                                                const datay = source.data['y'];
-                                                figures[i].x_range.start = Math.min(...datax);
-                                                figures[i].x_range.end   = Math.max(...datax);
-                                                figures[i].y_range.start = Math.min(...datay);
-                                                figures[i].y_range.end   = Math.max(...datay);
-                                            }
-                                        } else {
-                                            const x_selected = inds.map(i => source.data['x'][i]);
-                                            const y_selected = inds.map(i => source.data['y'][i]);
-                                            
-                                            const min_x = Math.min(...x_selected);
-                                            const max_x = Math.max(...x_selected);
-
-                                            const min_y = Math.min(...y_selected);
-                                            const max_y = Math.max(...y_selected);
-                                            const pad = 0.05 * (max_y - min_y);
-                                                
-
-                                            for (let i = 0; i < figures.length; i++) {
-                                                figures[i].x_range.start = min_x;
-                                                figures[i].x_range.end   = max_x;
-                                                figures[i].y_range.start = ymin - pad;
-                                                figures[i].y_range.end   = ymax + pad;}
-                                            }
-                                    """)
-
-        #self.source.selected.js_on_change("indices", self.selection_callback)
-        
-        
-        
-        ### Logo
-        self.logo = ImageURL(
-            url=value("https://github.com/Trappy-Scopes/Trappy-Scopes.github.io/blob/main/docs/assets/tsicon.png?raw=true"),
-            w_units="screen",
-            h_units="screen",
-            x=0,           # pixels from left
-            y=1520,        # pixels from bottom
-            w=64,           # pixels
-            h=25,
-            anchor="bottom_left"
+            plot_title.text = 'trappytv \u2014 ' + scopeid + ' \u2014 split ' + split_val;
+            """,
         )
 
-        self.fig.add_glyph(self.logo)
-
-
-        ## Checkboxes
-        self.checkboxes = None
-        if self.filtered_columns: 
-            self.checkboxes = CheckboxButtonGroup(labels=list(self.filtered_columns.keys()), active=[0, 1])
-
-        # ------------------------------------------------------------------
-        # Layout
-        # ------------------------------------------------------------------
-        self.layout = row(
-                            # Left column: widgets + main figure
-                            column(
-                                row(self.x_select, self.y_select, self.color_select),  # dropdowns
-                                row(self.alpha_slider, self.size_slider, self.split_slider),         # sliders
-                                row(self.checkboxes),                                                # Checkboxes if needed
-                                self.fig                                                             # main figure
-                            ),
-                            # Right column: fig2 stacked over fig3
-                            column(
-                                Spacer(width=250*4, height=100),
-                                (Spacer(width=250*4, height=40) if self.filtered_columns else None),
-                                self.fig2,
-                                self.fig3,
-                                self.fig4
-                            )
-                        )
-        
-        #self.color_bar = ColorBar(color_mapper=self.color_mapper, padding=0)
-        #self.fig.add_layout(self.color_bar, "right")
-    
-
-
-    def render_sides_all_lines(self, frame_col="gframe_"):
-        """"""
-        self.fig2.title.text = "speed"
-        if (frame_col == "gframe_") or (frame_col == "gframe"):
-            frame_col_ = self.df["gframe_"]
-        else:
-            frame_col_ = self.df[frame_col]
-        speed_ = self.df["speed"]
-        self.other_scatters = []
-        self.fig2.line(x=frame_col_,
-                       y=speed_,
-                       color="gray",
-                       alpha=0.2,
-                       line_width=2,
-                       level="underlay")
-        self.other_scatters.append(self.fig2.scatter(source=self.source,
-                       x=frame_col,
-                       y="speed",
-                       color=transform("gframe_", self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-        
-        self.fig3.title.text = "signal"
-        signal_ = self.df["signal"]
-        self.fig3.line(x=frame_col_,
-                       y=signal_,
-                       color="gray",
-                       alpha=0.2,
-                       line_width=3,
-                       level="underlay")
-        self.other_scatters.append(self.fig3.scatter(source=self.source,
-                       x=frame_col,
-                       y="signal",
-                       color=transform(frame_col, self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-        
-        
-        self.fig4.title.text = "temp"
-        temp_ = self.df["temp"]
-        self.fig4.line(x=frame_col_,
-                       y=temp_,
-                       color="gray",
-                       alpha=0.2,
-                       line_width=3,
-                       level="underlay")
-        self.other_scatters.append(self.fig4.scatter(source=self.source,
-                       x=frame_col,
-                       y="temp",
-                       color=transform(frame_col, self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-
-    
-    def render_sides_source(self, frame_col="gframe_"):
-        self.fig2.title.text = "speed"
-        self.other_scatters = []
-        self.fig2.line(source=self.source,
-                       x=frame_col,
-                       y="speed",
-                       color="gray",
-                       alpha=0.2,
-                       line_width=1)
-        self.other_scatters.append(self.fig2.scatter(source=self.source,
-                       x=frame_col,
-                       y="speed",
-                       color=transform(frame_col, self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-        
-        self.fig3.title.text = "signal"
-        self.fig3.line(source=self.source,
-                       x=frame_col,
-                       y="signal",
-                       color="gray",
-                       alpha=0.2,
-                       line_width=1)
-        self.other_scatters.append(self.fig3.scatter(source=self.source,
-                       x=frame_col,
-                       y="signal",
-                       color=transform(frame_col, self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-        
-        
-        self.fig4.title.text = "temp"
-        self.fig4.line(source=self.source,
-                       x=frame_col,
-                       y="temp",
-                       color="gray",
-                       alpha=0.2,
-                       line_width=1)
-        self.other_scatters.append(self.fig4.scatter(source=self.source,
-                       x=frame_col,
-                       y="temp",
-                       color=transform(frame_col, self.color_mapper),
-                       size=3,
-                       alpha=0.4,
-                       nonselection_alpha=0.0))
-        #print(self.other_scatters)
-    
-    def show(self, split_no=0, render_circle=False, xycols=["x_unrefined", "y_unrefined"], line_alpha=0.4, line_color="gray"):
-        
-        # Disable the split no slider for this mode
-        if hasattr(self, "split_slider"):
-            self.split_slider.disabled = True
- 
-        self.fig.renderers.remove(self.scatter)
-        self.fig.renderers.remove(self.line)
-        self.split_no = split_no
-        self.source.data = ColumnDataSource.from_df(self.df[self.df.split == split_no])
-        
-        
-        # Line ---- Render lines --> all lines
-        self.line = self.fig.line(
-            source = self.source,
-            color=line_color,
-            alpha=line_alpha,
-            line_width=2,
-            legend_label="Path"
+        self._finalize(
+            title=f"trappytv :: {self.scopeid} :: split {initial_split_val}",
+            hover_columns=hover_columns,
+            split_callback=split_cb,
+            wire_checkboxes=True,
         )
-        
-        ## Render scatters
-        self.color_mapper = LinearColorMapper(palette=Viridis256, low=self.df["frame"].min(), high=self.df["frame"].max())
-        
-        self.scatter = self.fig.scatter(
-            xycols[0], xycols[1],
-            source=self.source,
-            size=1,
-            alpha=0.6,
-            color=transform("frame", self.color_mapper),#transform("gframe_", self.color_mapper),
-            legend_label="Points",
-            nonselection_alpha=0.0
-        )
-        self.render_sides_source()
-        self.__render_interaction__()
-        show(self.layout)
-        
-    def view_all(self, sample=10, xycols=["x_unrefined", "y_unrefined"], line_alpha=0.4, line_color="gray"):
-        """Render all lines — however, sample every `sample` points.
-        This mode is meaningful at sample<15, such that continuous trajectories can be viewed.
+
+    def view_all(
+        self,
+        sample: int = 10,
+        xycols: Optional[Sequence[str]] = None,
+        line_alpha: float = 0.4,
+        line_color: str = "gray",
+        hover_columns: Optional[Sequence[str]] = None,
+    ) -> None:
         """
-        
-        ## Clear renderables
-        self.fig.renderers.remove(self.scatter)
-        self.fig.renderers.remove(self.line)
-        
+        Render the full trajectory with a sampled interactive scatter.
 
-        
-        # Line ---- Render lines --> all lines
-        self.x_lines = self.df[xycols[0]]
-        self.y_lines  = self.df[xycols[1]]
-        self.line = self.fig.line(
-            self.x_lines, self.y_lines,
-            color=line_color,
-            alpha=line_alpha,
-            line_width=2,
-            legend_label="Path"
-        )
-        
-        ## Render scatters
-        self.source.data = ColumnDataSource.from_df(self.df[::sample])
-        self.color_mapper = LinearColorMapper(palette=Viridis256, low=self.df["gframe_"].min(), high=self.df["gframe_"].max())
-        self.scatter = self.fig.scatter(
-            xycols[0], xycols[1],
-            source=self.source,
-            size=1,
-            alpha=0.6,
-            color=transform("gframe_", self.color_mapper),#transform("gframe_", self.color_mapper),
-            legend_label="Points",
-            nonselection_alpha=0.0
-        )
-        self.fig.title.text = f"trappytv :: Cell: {self.scopeid} :: Full-view – Sampling: #{sample}"
-        self.__render_interaction__()
-        self.render_sides_all_lines()
-        #print(self.other_scatters)
-        show(self.layout)
+        A static grey line spans all data; the scatter (and side panels) show
+        every ``sample``-th row and respond to interactive selection.
+        The split slider and checkboxes are disabled in this mode.
 
-
-    def view_ensamble(self, xycols=["x", "y"], line_alpha=0.4, line_color="gray",
-                      smooth_window=25, exclude_open=False):
-        """Render all particles in a given ensemble.
-        - Colour unique per (particle, scopeid) pair, local to each split
-        - Speed calculated from (x, y, frame) with rolling average, plotted on fig2
-        - smooth_window  : int  — rolling average window in frames (default 25)
-        - exclude_open   : bool — if True, exclude rows where trap_open == True (default False)
-        - All markers as circles
-        - scopeid + colony in hover tooltip
-        - Working split slider updates both fig and fig2
+        Parameters
+        ----------
+        sample : int
+            Step for sub-sampling: every Nth row of self.df.
+        xycols : [x_col, y_col], optional
+            Overrides default_xycols.
         """
-        import numpy as np
-        import pandas as pd
-        from bokeh.palettes import Category20, Turbo256
+        xycols    = list(xycols or self.default_xycols)
+        frame_col = "gframe_"
 
-        # ── 0. CLEAR RENDERERS + LEGEND ──────────────────────────────────────
-        self.fig.renderers.remove(self.scatter)
-        self.fig.renderers.remove(self.line)
+        self._clear_renderers()
+        self.source = ColumnDataSource(self.df[::sample])
 
-        if self.fig.legend:
-            self.fig.legend[0].items = []
-
-        self.line = self.fig.line(
-            x=xycols[0], y=xycols[1],
-            source=ColumnDataSource({xycols[0]: [], xycols[1]: []}),
-            alpha=0, line_width=0,
+        color = transform(frame_col, self._make_color_mapper(frame_col))
+        self._render_glyphs(
+            xycols,
+            line_source=(self.df[xycols[0]], self.df[xycols[1]]),
+            scatter_source=self.source,
+            scatter_color=color,
+            line_alpha=line_alpha,
+            line_color=line_color,
+        )
+        self._render_sides(self.source, frame_col=frame_col, background_df=self.df)
+        self._finalize(
+            title=f"trappytv :: {self.scopeid} :: full view (every {sample}th point)",
+            hover_columns=hover_columns,
+            disable_split_slider=True,
+            disable_checkboxes=True,
         )
 
-        # ── 0b. OPTIONALLY EXCLUDE OPEN TRAPS ────────────────────────────────
-        if exclude_open and "trap_open" in self.df.columns:
-            self.df = self.df[self.df["trap_open"] != True].copy()
+    def view_ensemble(
+        self,
+        xycols: Sequence[str] = ("x", "y"),
+        smooth_window: int = 25,
+        exclude_open: bool = False,
+        hover_columns: Optional[Sequence[str]] = None,
+    ) -> None:
+        """
+        Render all particles in an ensemble.
 
-        # ── 1. PALETTE ───────────────────────────────────────────────────────
-        max_pairs = (
-            self.df[["split", "particle", "scopeid"]]
+        Each (particle, scopeid) pair is assigned a unique colour per split.
+        Speed is computed per particle, rolling-averaged, and shown on the first
+        side panel. The split slider drives live JS updates.
+        Checkboxes are disabled in this mode.
+
+        Parameters
+        ----------
+        xycols : [x_col, y_col]
+            Trajectory columns; typically ("x", "y").
+        smooth_window : int
+            Rolling average window in frames for speed smoothing.
+        exclude_open : bool
+            If True, rows where trap_open == True are excluded.
+        hover_columns : sequence of str, optional
+            Extra hover columns; scopeid/colony/particle are added automatically.
+        """
+        self._clear_renderers()
+
+        prep       = self._prepare_ensemble(xycols, smooth_window, exclude_open)
+        mode_df    = prep["mode_df"]
+        frame_col  = prep["frame_col"]
+        all_speed  = prep["all_speed"]
+        initial    = prep["initial"]
+        init_speed = prep["init_speed"]
+
+        # ── Sources ───────────────────────────────────────────────────────────
+        self.full_source    = ColumnDataSource(mode_df)
+        self.display_source = ColumnDataSource(initial)
+        self.source         = self.display_source
+
+        self.speed_source = ColumnDataSource(data=dict(
+            xs=init_speed["xs"], ys=init_speed["ys"], colors=init_speed["colors"],
+        ))
+
+        # ── Main glyphs ───────────────────────────────────────────────────────
+        _empty = ColumnDataSource({xycols[0]: [], xycols[1]: []})
+        self.line = self.fig.line(
+            x=xycols[0], y=xycols[1], source=_empty, alpha=0, line_width=0,
+        )
+        self.scatter = self.fig.scatter(
+            x=xycols[0], y=xycols[1], source=self.display_source,
+            size=0.10, alpha=0.6, color="color", nonselection_alpha=0.0,
+        )
+
+        # ── Speed panel (first side figure) ──────────────────────────────────
+        if self.side_figs:
+            speed_fig = self.side_figs[0]
+            speed_fig.renderers = []
+            speed_fig.multi_line(
+                xs="xs", ys="ys", source=self.speed_source,
+                line_color="colors", line_width=1.5, alpha=0.8,
+            )
+            speed_fig.xaxis.axis_label = frame_col
+            speed_fig.yaxis.axis_label = f"speed (rolling {smooth_window} fr)"
+            speed_fig.title.text       = f"Speed (window={smooth_window})"
+
+        _blank = ColumnDataSource({"x": [], "y": []})
+        for fig in self.side_figs[1:]:
+            fig.renderers = []
+            fig.scatter(x="x", y="y", source=_blank, alpha=0, size=0)
+
+        # ── Split slider callback ─────────────────────────────────────────────
+        split_cb = CustomJS(
+            args=dict(
+                display_source=self.display_source,
+                full_source=self.full_source,
+                speed_source=self.speed_source,
+                all_speed=all_speed,
+                plot_title=self.fig.title,
+            ),
+            code="""
+            const split_val = Number(cb_obj.value);
+            const split_key = String(Math.round(split_val));
+            const full = full_source.data;
+
+            const nd = {};
+            for (const col of Object.keys(full)) { nd[col] = []; }
+            for (let i = 0; i < full['split'].length; i++) {
+                if (Number(full['split'][i]) === split_val) {
+                    for (const col of Object.keys(full)) { nd[col].push(full[col][i]); }
+                }
+            }
+            display_source.data = nd;
+
+            const sd = all_speed[split_key];
+            if (sd !== undefined) {
+                speed_source.data = { xs: sd['xs'], ys: sd['ys'], colors: sd['colors'] };
+            }
+            plot_title.text = 'trappytv \u2014 ensemble \u2014 split ' + split_key;
+            """,
+        )
+
+        extra    = [c for c in ("scopeid", "colony", "particle") if c in mode_df.columns]
+        base     = list(hover_columns or [])
+        combined = (base + [c for c in extra if c not in base]) or None
+
+        self._finalize(
+            title=f"trappytv :: {self.scopeid} :: ensemble :: split {self.split_no}",
+            hover_columns=combined,
+            split_callback=split_cb,
+            disable_checkboxes=True,
+        )
+
+    # ── Ensemble data preparation ─────────────────────────────────────────────
+
+    def _prepare_ensemble(
+        self,
+        xycols: Sequence[str],
+        smooth_window: int,
+        exclude_open: bool,
+    ) -> dict:
+        """
+        Build a colour-annotated dataframe and per-split speed data for ensemble mode.
+        Always operates on a local copy of self.df -- the original is never mutated.
+        """
+        mode_df = self.df.copy()
+
+        if exclude_open and "trap_open" in mode_df.columns:
+            mode_df = mode_df[mode_df["trap_open"] != True]
+
+        max_pairs = int(
+            mode_df[["split", "particle", "scopeid"]]
             .drop_duplicates()
             .groupby("split", observed=True)
             .size()
             .max()
         )
-        n = int(max_pairs)
-        if n <= 2:
+        if max_pairs <= 2:
             palette = ["#1f77b4", "#ff7f0e"]
-        elif n <= 20:
-            palette = list(Category20[max(3, n)])
+        elif max_pairs <= 20:
+            palette = list(Category20[max(3, max_pairs)])
         else:
-            step    = max(1, 256 // n)
-            palette = [Turbo256[i * step] for i in range(n)]
+            step    = max(1, 256 // max_pairs)
+            palette = [Turbo256[i * step] for i in range(max_pairs)]
 
-        # ── 2. ASSIGN COLOUR PER (particle, scopeid) PER SPLIT ───────────────
         combos = (
-            self.df[["split", "particle", "scopeid"]]
+            mode_df[["split", "particle", "scopeid"]]
             .drop_duplicates()
             .copy()
         )
         combos["_rank"] = combos.groupby("split", observed=True).cumcount()
-        combos["color"] = combos["_rank"].apply(lambda r: palette[r % len(palette)])
-        combos = combos.drop(columns="_rank")
+        combos["color"] = combos["_rank"].map(lambda r: palette[r % len(palette)])
+        combos    = combos.drop(columns="_rank")
+        mode_df   = mode_df.merge(combos, on=["split", "particle", "scopeid"], how="left")
+        frame_col = "frame" if "frame" in mode_df.columns else "gframe_"
 
-        if "color" in self.df.columns:
-            self.df = self.df.drop(columns="color")
-        self.df = self.df.merge(combos, on=["split", "particle", "scopeid"], how="left")
-
-        # ── 3. CALCULATE SPEED (+ ROLLING AVERAGE) PER SPLIT ─────────────────
-        frame_col = "frame" if "frame" in self.df.columns else "gframe_"
-
-        # Keys are STRINGS so JS dict lookup with String(cb_obj.value) matches
-        all_speed = {}
-        for split_val, grp in self.df.groupby("split", observed=True):
+        all_speed: dict = {}
+        for split_val, grp in mode_df.groupby("split", observed=True):
             xs, ys, colors = [], [], []
-            for (particle, scopeid), pgrp in grp.groupby(
-                ["particle", "scopeid"], sort=False, observed=True
-            ):
-                pgrp  = pgrp.sort_values(frame_col)
-                fx    = pgrp[xycols[0]].to_numpy(dtype=float)
-                fy    = pgrp[xycols[1]].to_numpy(dtype=float)
-                ft    = pgrp[frame_col].to_numpy(dtype=float)
+            for _, pgrp in grp.groupby(["particle", "scopeid"], sort=False, observed=True):
+                pgrp = pgrp.sort_values(frame_col)
+                fx   = pgrp[xycols[0]].to_numpy(dtype=float)
+                fy   = pgrp[xycols[1]].to_numpy(dtype=float)
+                ft   = pgrp[frame_col].to_numpy(dtype=float)
 
-                dx    = np.diff(fx)
-                dy    = np.diff(fy)
-                dt    = np.diff(ft)
+                dt = np.diff(ft)
                 dt[dt == 0] = np.nan
 
-                raw_speed = np.sqrt(dx**2 + dy**2) / dt
-                raw_speed = np.concatenate([[np.nan], raw_speed])
-
+                raw      = np.sqrt(np.diff(fx) ** 2 + np.diff(fy) ** 2) / dt
+                raw      = np.concatenate([[np.nan], raw])
                 smoothed = (
-                    pd.Series(raw_speed)
+                    pd.Series(raw)
                     .rolling(window=smooth_window, center=True, min_periods=1)
                     .mean()
                     .to_numpy()
                 )
-
                 mask = ~np.isnan(smoothed)
                 xs.append(ft[mask].tolist())
                 ys.append(smoothed[mask].tolist())
@@ -740,107 +751,15 @@ class TrappyTV:
 
             all_speed[str(int(split_val))] = {"xs": xs, "ys": ys, "colors": colors}
 
-        # ── 4. SOURCES ───────────────────────────────────────────────────────
-        self.full_source    = ColumnDataSource(self.df)
+        initial_split = int(mode_df["split"].min())
+        initial       = mode_df[mode_df["split"] == initial_split]
+        init_speed    = all_speed[str(initial_split)]
 
-        initial_split       = int(self.df["split"].min())
-        initial             = self.df[self.df["split"] == initial_split].copy()
-        self.display_source = ColumnDataSource(initial)
-        self.source         = self.display_source
-
-        init_speed        = all_speed[str(initial_split)]
-        self.speed_source = ColumnDataSource(data=dict(
-            xs     = init_speed["xs"],
-            ys     = init_speed["ys"],
-            colors = init_speed["colors"],
-        ))
-
-        # ── 5. MAIN SCATTER ──────────────────────────────────────────────────
-        self.scatter = self.fig.scatter(
-            x      = xycols[0],
-            y      = xycols[1],
-            source = self.display_source,
-            size   = 0.10,
-            alpha  = 0.6,
-            color  = "color",
-            nonselection_alpha = 0.0,
-        )
-
-        # ── 6. SPEED LINES ON fig2 ───────────────────────────────────────────
-        self.fig2.renderers = []
-        self.fig2.multi_line(
-            xs         = "xs",
-            ys         = "ys",
-            source     = self.speed_source,
-            line_color = "colors",
-            line_width = 1.5,
-            alpha      = 0.8,
-        )
-        self.fig2.xaxis.axis_label = frame_col
-        self.fig2.yaxis.axis_label = f"speed (rolling {smooth_window}fr)"
-        self.fig2.title.text       = f"Speed per trajectory (window={smooth_window})"
-
-        _empty = ColumnDataSource({"x": [], "y": []})
-        self.fig3.renderers = []
-        self.fig3.scatter(x="x", y="y", source=_empty, alpha=0)
-        self.fig4.renderers = []
-        self.fig4.scatter(x="x", y="y", source=_empty, alpha=0)
-
-        # ── 7. REBUILD WIDGETS ───────────────────────────────────────────────
-        self.__render_interaction__(frame_col=frame_col)
-
-        # ── 8. PATCH HOVER (add scopeid + colony) ────────────────────────────
-        extra_tips = []
-        if "scopeid" in self.df.columns:
-            extra_tips.append(("scopeid", "@scopeid"))
-        if "colony" in self.df.columns:
-            extra_tips.append(("colony",  "@colony"))
-
-        if extra_tips:
-            for tool in self.fig.tools:
-                if isinstance(tool, HoverTool) and self.scatter in tool.renderers:
-                    tool.tooltips = tool.tooltips + extra_tips
-                    break
-
-        # ── 9. SPLIT SLIDER CALLBACK (after __render_interaction__) ──────────
-        callback = CustomJS(
-            args=dict(
-                display_source = self.display_source,
-                full_source    = self.full_source,
-                speed_source   = self.speed_source,
-                all_speed      = all_speed,
-                plot_title     = self.fig.title,
-            ),
-            code="""
-            const split_val = cb_obj.value;
-            const split_key = String(split_val);
-            const full      = full_source.data;
-
-            // ── Update main scatter ────────────────────────────────────────
-            const nd = {};
-            for (const col of Object.keys(full)) { nd[col] = []; }
-
-            for (let i = 0; i < full['split'].length; i++) {
-                if (full['split'][i] === split_val) {
-                    for (const col of Object.keys(full)) {
-                        nd[col].push(full[col][i]);
-                    }
-                }
-            }
-            display_source.data = nd;
-
-            // ── Update speed lines ─────────────────────────────────────────
-            const sd = all_speed[split_key];
-            if (sd !== undefined) {
-                speed_source.data = { xs: sd['xs'], ys: sd['ys'], colors: sd['colors'] };
-            }
-
-            plot_title.text = 'Trajectories \u2014 split ' + split_val;
-            """,
-        )
-
-        self.split_slider.js_on_change("value", callback)
-        self.fig.title.text = (
-            f"trappytv :: Cell: {self.scopeid} :: Ensemble view :: split:: {self.split_no}"
-        )
-        show(self.layout)
+        return {
+            "mode_df":       mode_df,
+            "frame_col":     frame_col,
+            "all_speed":     all_speed,
+            "initial_split": initial_split,
+            "initial":       initial,
+            "init_speed":    init_speed,
+        }
