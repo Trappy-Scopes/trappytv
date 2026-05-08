@@ -1,0 +1,1 @@
+{% include 'interactive_plots/split_view.html %}

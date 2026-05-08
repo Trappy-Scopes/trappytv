@@ -5,9 +5,9 @@ repo_url: https://github.com/Trappy-Scopes/trappytv
 
 nav:
   - Home: index.md
-  - Split Preview: interactive_plots/split_view.html
-  - Full Preview: interactive_plots/full_view.html
-  - Ensemble Preview: interactive_plots/ensemble_view.html
+  - Split Preview: split_view.md
+  - Full Preview: full_view.md
+  - Ensemble Preview: ensemble_view.md
   - All Trappy-Scopes Projects: https://trappy-scopes.github.io
 
 
