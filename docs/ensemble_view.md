@@ -1,1 +1,1 @@
-{% include 'interactive_plots/ensemble_view.html %}
+{% include 'interactive_plots/ensemble_view.html' %}
