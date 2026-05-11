@@ -1,1 +1,0 @@
-{% include 'interactive_plots/full_view.html' %}
