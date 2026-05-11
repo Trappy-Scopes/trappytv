@@ -52,6 +52,18 @@ _DEFAULT_SIDE_COLS: Tuple[Tuple[str, str], ...] = (
 )
 
 
+# ── Layout geometry constants ────────────────────────────────────────────────
+# Pixel heights of each widget row type as rendered by Bokeh.
+# Defined once here and used consistently in both __init__ (figs_height calc)
+# and _build_layout (top spacer), so the two sides can never drift out of sync.
+_H_ROW_SELECT   = 60   # logo + x/y/color selects row
+_H_ROW_SLIDER   = 60   # any slider row (main sliders or per-panel size/alpha)
+_H_ROW_CHECKBOX = 45   # CheckboxButtonGroup row
+_H_ROW_OVERLAY  = 60   # overlay checkboxes + sliders combined row
+_H_PANEL_CTRL   = 95   # per side-panel control overhead (select ~35 + slider row ~60)
+                           # kept for reference; not subtracted from figs_height
+
+
 # ── TrappyCore ────────────────────────────────────────────────────────────────
 
 class TrappyCore:
@@ -103,15 +115,27 @@ class TrappyCore:
         # frame_col is set by each view method before _finalize; initialise here.
         self.frame_col: str = "gframe_"
 
-        # Auto-compute side-figure height so all panels fit within self._height.
-        # Each panel consumes: slider row (~50 px) + no-title select (~35 px) + fig.
-        # _PANEL_CTRL_H is the non-figure overhead per panel.
-        _PANEL_CTRL_H = 85
+        # Compute the total pixel height of the left-column widget rows that sit
+        # above self.fig. This drives the right-column top spacer in _build_layout
+        # so both sides are computed from the same constants.
+        _has_overlay = bool(filtered_columns)
+        self._controls_h = (
+            _H_ROW_SELECT       # logo + x/y/color selects
+            + _H_ROW_SLIDER     # alpha / size / split sliders
+            + _H_ROW_CHECKBOX   # raw checkboxes
+            + (_H_ROW_OVERLAY if _has_overlay else 0)  # overlay row (if present)
+        )
+
+        # Auto-compute side-figure height by dividing the main figure height equally.
+        # Each panel figure gets height // n_side pixels — a clean fraction of the
+        # main figure. The per-panel control rows (select + sliders, ~_H_PANEL_CTRL px)
+        # add overhead that extends the right column slightly below the main figure,
+        # which is an acceptable trade-off for conveniently sized side panels.
         n_side = len(side_cols)
         if figs_height is not None:
             self._figs_height = figs_height
         elif n_side > 0:
-            self._figs_height = max(80, (height - n_side * _PANEL_CTRL_H) // n_side)
+            self._figs_height = max(80, height // n_side)
         else:
             self._figs_height = height // 3
 
@@ -222,7 +246,7 @@ class TrappyCore:
 
     def _wire_style_sliders(self) -> None:
         """
-        Attach alpha/size callbacks to the *current* self.scatter and self.other_scatters.
+        Attach alpha/size callbacks to the *current* self.scatter (main figure only).
         Must be called from _finalize(), after every view method creates real renderers.
         Clears previously attached callbacks first to avoid stacking on re-renders.
         """
@@ -232,7 +256,6 @@ class TrappyCore:
         style_cb = CustomJS(
             args=dict(
                 scatter=self.scatter,
-                other_scatters=list(self.other_scatters),
                 alpha_slider=self.alpha_slider,
                 size_slider=self.size_slider,
             ),
@@ -240,10 +263,6 @@ class TrappyCore:
             scatter.glyph.size       = size_slider.value;
             scatter.glyph.fill_alpha = alpha_slider.value;
             scatter.change.emit();
-            for (let i = 0; i < other_scatters.length; i++) {
-                other_scatters[i].glyph.size       = size_slider.value;
-                other_scatters[i].glyph.fill_alpha = alpha_slider.value;
-            }
             """,
         )
         self.alpha_slider.js_on_change("value", style_cb)
@@ -302,13 +321,12 @@ class TrappyCore:
                 args=dict(
                     scatter=self.other_scatters[i],
                     source=self.source,
-                    fig=fig,
-                    frame_col=self.frame_col,
+                    yaxis=fig.yaxis[0],
                 ),
                 code="""
                 const col = cb_obj.value;
-                scatter.glyph.y         = { field: col };
-                fig.yaxis[0].axis_label = col;
+                scatter.glyph.y  = { field: col };
+                yaxis.axis_label = col;
                 source.change.emit();
                 """,
             )
@@ -435,6 +453,50 @@ class TrappyCore:
             title="Overlay alpha", width=int(half/2),
         )
 
+    def _wire_overlay_sliders(self) -> None:
+        """
+        Wire the overlay size/alpha sliders to all current overlay renderers.
+        Called from _finalize when wire_checkboxes=True (view_split with overlays).
+        Clears previously attached callbacks first.
+
+        This is safe to make interactive: we are only updating glyph visual
+        properties (size, alpha) on already-rendered static glyphs — no data
+        source re-serialisation, no Python round-trip, no expensive re-render.
+        """
+        if self.overlay_size_slider is None or not self.overlay_renderers:
+            return
+
+        for sl in (self.overlay_size_slider, self.overlay_alpha_slider):
+            sl.js_property_callbacks.pop("change:value", None)
+
+        all_lines    = [pair[0] for pair in self.overlay_renderers]
+        all_scatters = [pair[1] for pair in self.overlay_renderers]
+
+        cb = CustomJS(
+            args=dict(
+                lines=all_lines,
+                scatters=all_scatters,
+                size_slider=self.overlay_size_slider,
+                alpha_slider=self.overlay_alpha_slider,
+            ),
+            code="""
+            const sz = size_slider.value;
+            const al = alpha_slider.value;
+            for (let i = 0; i < scatters.length; i++) {
+                scatters[i].glyph.size       = sz;
+                scatters[i].glyph.fill_alpha = al;
+                scatters[i].glyph.line_alpha = al;
+                scatters[i].change.emit();
+            }
+            for (let i = 0; i < lines.length; i++) {
+                lines[i].glyph.line_alpha = al;
+                lines[i].change.emit();
+            }
+            """,
+        )
+        self.overlay_size_slider.js_on_change("value", cb)
+        self.overlay_alpha_slider.js_on_change("value", cb)
+
     def _build_raw_checkboxes(self) -> None:
         """
         Create the always-present raw-line / raw-scatter toggle checkboxes.
@@ -479,7 +541,13 @@ class TrappyCore:
     # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build_layout(self) -> None:
-        """Assemble the two-column layout from widgets and figures."""
+        """Assemble the two-column layout from widgets and figures.
+
+        Heights are derived from the module-level _H_* constants, which are also
+        used in __init__ to compute self._controls_h and self._figs_height.
+        This guarantees the right-column top spacer and left-column control rows
+        stay in sync without any hardcoded magic numbers here.
+        """
         # ── Left column ───────────────────────────────────────────────────────
         left = [
             row(self.logo_div, Spacer(width=20), self.x_select, self.y_select, self.color_select),
@@ -487,24 +555,16 @@ class TrappyCore:
             self.raw_checkboxes,
         ]
         if self.checkboxes is not None:
-            row_ = [self.checkboxes]
+            overlay_row_widgets = [self.checkboxes]
             if self.overlay_size_slider is not None:
-                row_ = row_ + ([self.overlay_size_slider, self.overlay_alpha_slider])
-        
-        left.append(row(*row_))
-
+                overlay_row_widgets += [self.overlay_size_slider, self.overlay_alpha_slider]
+            left.append(row(*overlay_row_widgets))
         left.append(self.fig)
 
         # ── Right column ──────────────────────────────────────────────────────
-        # Top spacer height must match the pixel height of the left-column widgets
-        # above self.fig. Empirical measurements per widget row type:
-        #   select row  ~55 px  |  slider row  ~55 px  |  checkbox row  ~38 px
-        # Base (logo+selects + sliders + raw_checkboxes): ~148 px
-        # Overlay widgets (checkboxes + sliders):         ~93 px  (only if present)
-        _overlay_h = 93 if self.checkboxes is not None else 0
-        top_spacer_h = 100 + _overlay_h
-
-        right: list = [Spacer(width=self._figs_width, height=top_spacer_h)]
+        # self._controls_h matches the total height of the left-column widget rows
+        # above self.fig (computed in __init__ from the same _H_* constants).
+        right: list = [Spacer(width=self._figs_width, height=self._controls_h)]
         for size_sl, alpha_sl, sel, fig in zip(
             self.side_size_sliders, self.side_alpha_sliders,
             self.side_selects, self.side_figs,

@@ -409,6 +409,10 @@ class TrappyTV(TrappyCore):
                 self.checkboxes.disabled = False
                 if wire_checkboxes:
                     self._wire_checkboxes()
+                    # Wire overlay size/alpha sliders to the current overlay renderers.
+                    # Safe to make interactive: only updates glyph visual properties,
+                    # no data re-serialisation.
+                    self._wire_overlay_sliders()
 
         self.display()
 
