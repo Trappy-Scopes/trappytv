@@ -115,6 +115,9 @@ class CellView:
         if self.compute_speed_flag:
             self._compute_speed()
 
+        ## Add Stuff
+        self.stuff = {}
+
     # =========================================================
     # LOGGING
     # =========================================================

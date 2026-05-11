@@ -92,10 +92,12 @@ class TrappyTV(TrappyCore):
             height=height,
             figs_width=figs_width,
             figs_height=figs_height,
+            default_xycols=default_xycols,
             filtered_columns=filtered_columns,
             side_cols=side_cols,
         )
-        self.default_xycols: list[str] = list(default_xycols)
+        # default_xycols is now stored on self by TrappyCore.__init__ before
+        # _build_widgets runs, so the X/Y selects pick up the correct defaults.
         self.hover_builder: HoverBuilder = hover_builder or self._default_hover_builder
         self.hover_columns: Optional[tuple] = (
             tuple(hover_columns) if hover_columns is not None else None
@@ -152,10 +154,15 @@ class TrappyTV(TrappyCore):
         # Keep checkboxes in sync with valid overlays only.
         if self.checkboxes is not None:
             self.checkboxes.labels = [v[0] for v in valid]
-            self.checkboxes.active = list(range(len(valid)))
+            self.checkboxes.active = []   # overlays start hidden; raw_checkboxes are the only defaults
 
         self.overlay_renderers = []
         self.overlay_sources   = []
+
+        # Read overlay appearance from the non-interactive sliders (set once at render
+        # time; no JS callback — intentional to avoid expensive re-renders).
+        ov_size  = self.overlay_size_slider.value  if self.overlay_size_slider  is not None else 3.0
+        ov_alpha = self.overlay_alpha_slider.value if self.overlay_alpha_slider is not None else 0.5
 
         for i, (label, x_col, y_col) in enumerate(valid):
             color  = _OVERLAY_PALETTE[i % len(_OVERLAY_PALETTE)]
@@ -169,12 +176,12 @@ class TrappyTV(TrappyCore):
 
             line = self.fig.line(
                 x=x_col, y=y_col, source=source,
-                color=color, alpha=0.5, line_width=1,
+                color=color, alpha=ov_alpha, line_width=1,
                 legend_label=label,
             )
             scatter = self.fig.scatter(
                 x=x_col, y=y_col, source=source,
-                color=color, marker=marker, size=3, alpha=0.5,
+                color=color, marker=marker, size=ov_size, alpha=ov_alpha,
                 legend_label=label,
                 nonselection_alpha=0.0,
             )
@@ -310,11 +317,11 @@ class TrappyTV(TrappyCore):
         """
         self.other_scatters = []
 
-        for fig, (y_col, label) in zip(self.side_figs, self.side_cols):
+        for i, (fig, (y_col, label)) in enumerate(zip(self.side_figs, self.side_cols)):
             fig.renderers        = []
-            fig.title.text       = label
             fig.xaxis.axis_label = frame_col
             fig.yaxis.axis_label = y_col
+            # Title intentionally blank (task 3); the y-axis label carries the info.
 
             if y_col not in self.df.columns:
                 continue
@@ -325,6 +332,10 @@ class TrappyTV(TrappyCore):
                     color="gray", alpha=0.2, line_width=2, level="underlay",
                 )
 
+            # Read size and alpha from per-panel sliders at render time.
+            s_size  = self.side_size_sliders[i].value  if i < len(self.side_size_sliders)  else 3.0
+            s_alpha = self.side_alpha_sliders[i].value if i < len(self.side_alpha_sliders) else 0.4
+
             scatter_color = (
                 transform(frame_col, self.color_mapper)
                 if self.color_mapper is not None
@@ -333,7 +344,7 @@ class TrappyTV(TrappyCore):
             scatter = fig.scatter(
                 source=source,
                 x=frame_col, y=y_col,
-                color=scatter_color, size=3, alpha=0.4,
+                color=scatter_color, size=s_size, alpha=s_alpha,
                 nonselection_alpha=0.0,
             )
             self.other_scatters.append(scatter)
@@ -383,6 +394,12 @@ class TrappyTV(TrappyCore):
         # Reset both to visible first so the widget state matches reality on re-render.
         self.raw_checkboxes.active = [0, 1]
         self._wire_raw_checkboxes()
+
+        # Side-panel column selects and style sliders -- always wired.
+        # self.source, self.frame_col, and self.other_scatters are set by the
+        # view method before _finalize is called.
+        self._wire_side_selects()
+        self._wire_side_style_sliders()
 
         # Overlay checkboxes -- only wired in view_split; disabled elsewhere.
         if self.checkboxes is not None:
@@ -460,6 +477,7 @@ class TrappyTV(TrappyCore):
         overlay_ycols  = [y for _, _, y in valid_overlays]
 
         # ── Side panels ───────────────────────────────────────────────────────
+        self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
         self._render_sides(self.source, frame_col=frame_col)
 
         # ── Split slider callback ─────────────────────────────────────────────
@@ -560,6 +578,7 @@ class TrappyTV(TrappyCore):
             line_alpha=line_alpha,
             line_color=line_color,
         )
+        self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
         self._render_sides(self.source, frame_col=frame_col, background_df=self.df)
         self._finalize(
             title=f"trappytv :: {self.scopeid} :: full view (every {sample}th point)",
@@ -673,6 +692,8 @@ class TrappyTV(TrappyCore):
         extra    = [c for c in ("scopeid", "colony", "particle") if c in mode_df.columns]
         base     = list(hover_columns or [])
         combined = (base + [c for c in extra if c not in base]) or None
+
+        self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
 
         self._finalize(
             title=f"trappytv :: {self.scopeid} :: ensemble :: split {self.split_no}",

@@ -19,14 +19,13 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
-from bokeh.core.properties import value as bokeh_value
 from bokeh.io import show as _bokeh_show
 from bokeh.layouts import column, row
 from bokeh.models import (
     CheckboxButtonGroup,
     ColumnDataSource,
     CustomJS,
-    ImageURL,
+    Div,
     LinearColorMapper,
     Select,
     Slider,
@@ -84,6 +83,7 @@ class TrappyCore:
         height: int = 1000,
         figs_width: int = 140 * 5,
         figs_height: Optional[int] = None,
+        default_xycols: Sequence[str] = ("x", "y"),
         filtered_columns: dict = {},
         side_cols: Sequence[Tuple[str, str]] = _DEFAULT_SIDE_COLS,
     ) -> None:
@@ -94,10 +94,26 @@ class TrappyCore:
         self._width      = width
         self._height     = height
         self._figs_width = figs_width
-        self._figs_height = figs_height if figs_height is not None else height // 3
 
+        # Stored before _build_widgets so _build_selects can read them.
+        self.default_xycols: list[str] = list(default_xycols)
         self.filtered_columns = dict(filtered_columns)
         self.side_cols = list(side_cols)
+
+        # frame_col is set by each view method before _finalize; initialise here.
+        self.frame_col: str = "gframe_"
+
+        # Auto-compute side-figure height so all panels fit within self._height.
+        # Each panel consumes: slider row (~50 px) + no-title select (~35 px) + fig.
+        # _PANEL_CTRL_H is the non-figure overhead per panel.
+        _PANEL_CTRL_H = 85
+        n_side = len(side_cols)
+        if figs_height is not None:
+            self._figs_height = figs_height
+        elif n_side > 0:
+            self._figs_height = max(80, (height - n_side * _PANEL_CTRL_H) // n_side)
+        else:
+            self._figs_height = height // 3
 
         # ── 3. Build everything ───────────────────────────────────────────────
         self._build_figures()
@@ -147,7 +163,7 @@ class TrappyCore:
             figure(
                 width=self._figs_width,
                 height=self._figs_height,
-                title=label,
+                title="",
                 tools=_SIDE_TOOLS,
                 output_backend="webgl",
             )
@@ -168,35 +184,23 @@ class TrappyCore:
         self.scatter = self.fig.scatter("x", "y", source=_empty, alpha=0, size=0)
         self.line    = self.fig.line("x", "y", source=_empty, alpha=0, line_width=0)
 
-        # Logo — positioned relative to figure height, not a hardcoded pixel value.
-        self._add_logo()
-
         # Color mapper — initialised to None; created lazily by _make_color_mapper.
         self.color_mapper: Optional[LinearColorMapper] = None
 
         # Side-panel scatter renderers — populated by _render_sides each view call.
         self.other_scatters: list = []
 
-    def _add_logo(self) -> None:
-        logo = ImageURL(
-            url=bokeh_value(_LOGO_URL),
-            w_units="screen",
-            h_units="screen",
-            x=0,
-            y=self._height + 20,
-            w=64,
-            h=25,
-            anchor="bottom_left",
-        )
-        self.fig.add_glyph(logo)
-
     # ── Widget factory ────────────────────────────────────────────────────────
 
     def _build_widgets(self) -> None:
         self._build_sliders()
         self._build_selects()
+        self._build_side_selects()
+        self._build_side_style_sliders()
         self._build_raw_checkboxes()
         self._build_checkboxes()
+        self._build_overlay_sliders()
+        self._build_logo()
 
     def _build_sliders(self) -> None:
         """Create alpha, size, and split sliders. Callbacks are wired later by
@@ -247,13 +251,83 @@ class TrappyCore:
 
     def _build_selects(self) -> None:
         """Create X/Y column dropdowns and color-field dropdown. XY callbacks are wired
-        later by _wire_xy_selects(), called from _finalize() after real renderers exist."""
+        later by _wire_xy_selects(), called from _finalize() after real renderers exist.
+        Initial X/Y values come from self.default_xycols, which must be set before
+        this method is called (done in __init__ before _build_widgets).
+        """
         default_color = "gframe_" if "gframe_" in self.columns else self.columns[0]
 
-        self.x_select = Select(title="X", value="x", options=self.columns, width=200)
-        self.y_select = Select(title="Y", value="y", options=self.columns, width=200)
-        self.color_select = Select(
-            title="Color", value=default_color, options=self.columns, width=200
+        x0 = self.default_xycols[0] if self.default_xycols[0] in self.columns else self.columns[0]
+        y0 = self.default_xycols[1] if self.default_xycols[1] in self.columns else self.columns[0]
+
+        self.x_select     = Select(title="X",     value=x0,            options=self.columns, width=200)
+        self.y_select     = Select(title="Y",     value=y0,            options=self.columns, width=200)
+        self.color_select = Select(title="Color", value=default_color, options=self.columns, width=200)
+
+    def _build_side_selects(self) -> None:
+        """
+        Create one column-selector dropdown per side figure.
+        The initial value defaults to side_cols[i][0] if that column exists.
+        Callbacks are wired per-render by _wire_side_selects() in _finalize().
+        """
+        self.side_selects: list[Select] = []
+        for i, (y_col, label) in enumerate(self.side_cols):
+            default_val = y_col if y_col in self.columns else (self.columns[0] if self.columns else "")
+            sel = Select(
+                title="",
+                value=default_val,
+                options=self.columns,
+                width=int(self._figs_width/4),
+            )
+            self.side_selects.append(sel)
+
+    def _wire_side_selects(self) -> None:
+        """
+        Wire each side-panel column dropdown to update its scatter's y-field and
+        the figure's y-axis label in real time.
+
+        Uses self.source, self.frame_col, and self.other_scatters — all of which
+        are set by the view method before _finalize() is called.
+        Must be called from _finalize() after _render_sides() has populated
+        self.other_scatters with the current renderers.
+        """
+        for i, (sel, fig) in enumerate(zip(self.side_selects, self.side_figs)):
+            sel.js_property_callbacks.pop("change:value", None)
+
+            if i >= len(self.other_scatters):
+                # No scatter for this panel (e.g. ensemble mode leaves panels blank).
+                continue
+
+            cb = CustomJS(
+                args=dict(
+                    scatter=self.other_scatters[i],
+                    source=self.source,
+                    fig=fig,
+                    frame_col=self.frame_col,
+                ),
+                code="""
+                const col = cb_obj.value;
+                scatter.glyph.y         = { field: col };
+                fig.yaxis[0].axis_label = col;
+                source.change.emit();
+                """,
+            )
+            sel.js_on_change("value", cb)
+
+    def _build_logo(self) -> None:
+        """
+        Create a Div widget containing the project logo as an HTML <img> tag.
+        Placed in the layout (not inside any figure) so it does not affect
+        data-space geometry or aspect ratios.
+        # 64px;height:25px or width:90px;height:35px;
+        """
+        self.logo_div = Div(
+            text=(
+                f'<img src="{_LOGO_URL}" '
+                'style="width:90px;height:35px;;display:block;margin-top:8px;">'
+            ),
+            width=64,
+            height=35,
         )
 
     def _wire_xy_selects(self) -> None:
@@ -288,6 +362,78 @@ class TrappyCore:
         )
         self.x_select.js_on_change("value", xy_cb)
         self.y_select.js_on_change("value", xy_cb)
+
+    def _build_side_style_sliders(self) -> None:
+        """
+        Create per-panel size and alpha sliders for the side figures.
+        These ARE interactive (JS callbacks wired in _wire_side_style_sliders).
+        Values update each panel's scatter glyph live without a Python round-trip.
+        """
+        half = self._figs_width // 2 - 4
+        self.side_size_sliders:  list = []
+        self.side_alpha_sliders: list = []
+        for _, label in self.side_cols:
+            self.side_size_sliders.append(
+                Slider(start=0.001, end=20, value=3.0, step=0.1,
+                       title="Size", width=int(half/2))
+            )
+            self.side_alpha_sliders.append(
+                Slider(start=0.0, end=1.0, value=0.4, step=0.05,
+                       title="Alpha", width=int(half/2))
+            )
+
+    def _wire_side_style_sliders(self) -> None:
+        """
+        Wire per-panel size/alpha sliders to the *current* other_scatters renderers.
+        Called from _finalize() after _render_sides() has populated other_scatters.
+        Clears previously attached callbacks first to avoid stacking on re-renders.
+        Skips panels where no scatter exists (e.g. blank ensemble panels).
+        """
+        for i, (size_sl, alpha_sl) in enumerate(
+            zip(self.side_size_sliders, self.side_alpha_sliders)
+        ):
+            for sl in (size_sl, alpha_sl):
+                sl.js_property_callbacks.pop("change:value", None)
+
+            if i >= len(self.other_scatters):
+                continue
+
+            cb = CustomJS(
+                args=dict(
+                    scatter=self.other_scatters[i],
+                    size_slider=size_sl,
+                    alpha_slider=alpha_sl,
+                ),
+                code="""
+                scatter.glyph.size       = size_slider.value;
+                scatter.glyph.fill_alpha = alpha_slider.value;
+                scatter.change.emit();
+                """,
+            )
+            size_sl.js_on_change("value", cb)
+            alpha_sl.js_on_change("value", cb)
+
+    def _build_overlay_sliders(self) -> None:
+        """
+        Create size and alpha sliders for the filtered-column overlays.
+        Only created when filtered_columns is non-empty.
+        NOT interactive (no JS callbacks) — values are read at render time in
+        _render_filtered_overlays(). Kept non-interactive deliberately to avoid
+        triggering expensive re-renders of static overlay glyphs.
+        """
+        if not self.filtered_columns:
+            self.overlay_size_slider  = None
+            self.overlay_alpha_slider = None
+            return
+        half = self._figs_width // 2 - 4
+        self.overlay_size_slider = Slider(
+            start=0.001, end=20, value=3.0, step=0.1,
+            title="Overlay size", width=int(half/2),
+        )
+        self.overlay_alpha_slider = Slider(
+            start=0.0, end=1.0, value=0.5, step=0.05,
+            title="Overlay alpha", width=int(half/2),
+        )
 
     def _build_raw_checkboxes(self) -> None:
         """
@@ -334,21 +480,37 @@ class TrappyCore:
 
     def _build_layout(self) -> None:
         """Assemble the two-column layout from widgets and figures."""
+        # ── Left column ───────────────────────────────────────────────────────
         left = [
-            row(self.x_select, self.y_select, self.color_select),
+            row(self.logo_div, Spacer(width=20), self.x_select, self.y_select, self.color_select),
             row(self.alpha_slider, self.size_slider, self.split_slider),
-            self.raw_checkboxes,          # always present; wired per view in _finalize
+            self.raw_checkboxes,
         ]
         if self.checkboxes is not None:
-            left.append(self.checkboxes)  # overlay checkboxes; may be disabled per view
+            row_ = [self.checkboxes]
+            if self.overlay_size_slider is not None:
+                row_ = row_ + ([self.overlay_size_slider, self.overlay_alpha_slider])
+        
+        left.append(row(*row_))
+
         left.append(self.fig)
 
-        # Right column: top spacer accounts for the two slider rows + raw_checkboxes row.
-        # An extra spacer is added when overlay checkboxes are present.
-        right: list = [Spacer(width=self._figs_width, height=140)]
-        if self.checkboxes is not None:
-            right.append(Spacer(width=self._figs_width, height=40))
-        right.extend(self.side_figs)
+        # ── Right column ──────────────────────────────────────────────────────
+        # Top spacer height must match the pixel height of the left-column widgets
+        # above self.fig. Empirical measurements per widget row type:
+        #   select row  ~55 px  |  slider row  ~55 px  |  checkbox row  ~38 px
+        # Base (logo+selects + sliders + raw_checkboxes): ~148 px
+        # Overlay widgets (checkboxes + sliders):         ~93 px  (only if present)
+        _overlay_h = 93 if self.checkboxes is not None else 0
+        top_spacer_h = 100 + _overlay_h
+
+        right: list = [Spacer(width=self._figs_width, height=top_spacer_h)]
+        for size_sl, alpha_sl, sel, fig in zip(
+            self.side_size_sliders, self.side_alpha_sliders,
+            self.side_selects, self.side_figs,
+        ):
+            right.append(row(sel, size_sl, alpha_sl))
+            right.append(fig)
 
         self.layout = row(column(*left), column(*right))
 
