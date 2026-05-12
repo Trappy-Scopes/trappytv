@@ -8,7 +8,7 @@ Interactive Bokeh visualisation for [Trappy-Scopes](https://trappy-scopes.github
 
 ---
 
-A live demo of the tool can be foud at: https://trappy-scopes.github.io/trappytv/
+A live demo of the tool can be foud at: [www.trappy-scopes.github.io/trappytv](www.trappy-scopes.github.io/trappytv).
 
 ```python
 from trappytv import CellView, TrappyTV
