@@ -4,7 +4,7 @@ Interactive Bokeh visualisation for [Trappy-Scopes](https://trappy-scopes.github
 
 
 
-![](docs/assets/trappytv_logo.png)
+<img src="https://github.com/Trappy-Scopes/trappytv/blob/main/docs/assets/trappytv_logo.png?raw=true">
 
 ---
 
