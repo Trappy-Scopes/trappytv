@@ -2,6 +2,8 @@
 
 Interactive Bokeh visualisation for [Trappy-Scopes](https://trappy-scopes.github.io) trajectory data. Runs inside Jupyter notebooks. The visualisation tool is vibecoded using Claude. The analysis pipeline was conceptualised and verified by a human.
 
+A live demo of the tool can be foud at: https://trappy-scopes.github.io/trappytv/
+
 ```python
 from trappytv import CellView, TrappyTV
 
