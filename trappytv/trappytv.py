@@ -46,9 +46,8 @@ class TrappyTV(TrappyCore):
     cell : object
         Cell data container (see TrappyCore for details).
     width, height : int
-        Main figure pixel dimensions.
-    figs_width, figs_height : int
-        Side figure pixel dimensions.
+        Main figure pixel dimensions. The right column width and side-panel
+        heights are derived automatically (see TrappyCore for the formulae).
     default_xycols : sequence of str
         Default [x_col, y_col] used when xycols is not passed to a view method.
     filtered_columns : dict
@@ -74,8 +73,6 @@ class TrappyTV(TrappyCore):
         cell,
         width: int = 1000,
         height: int = 1000,
-        figs_width: int = 140 * 5,
-        figs_height: Optional[int] = None,
         default_xycols: Sequence[str] = ("x_unrefined", "y_unrefined"),
         filtered_columns: dict = {
             "filtered":      ["xf",     "yf"    ],
@@ -90,8 +87,6 @@ class TrappyTV(TrappyCore):
             cell=cell,
             width=width,
             height=height,
-            figs_width=figs_width,
-            figs_height=figs_height,
             default_xycols=default_xycols,
             filtered_columns=filtered_columns,
             side_cols=side_cols,

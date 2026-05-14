@@ -6,10 +6,18 @@ Infrastructure base for TrappyTV.
 Responsibilities
 ----------------
 - Data normalisation from a cell object
-- Figure and side-figure creation
-- Widget creation: sliders, column selects, checkboxes
-- Layout assembly
+- Figure and side-figure creation (main fig, histogram row, side panels)
+- Widget creation: sliders, column selects, checkboxes, text info div
+- Layout assembly (two-column wireframe layout)
 - Shared renderer helpers: clear, color mapper factory, unified glyph creation
+
+Layout (two-column)
+-------------------
+Left  : logo + X/Y/Color selects | Alpha/Size/Split sliders |
+         raw checkboxes + trap/fov checkboxes |
+         filtered-column checkboxes + overlay sliders | fig1 (main)
+Right : text info div | hist1–hist5 row |
+         [controls + fig] × N side panels
 
 This class is not meant to be instantiated directly.
 View logic (view_split, view_all, view_ensemble) lives in TrappyTV.
@@ -55,13 +63,15 @@ _DEFAULT_SIDE_COLS: Tuple[Tuple[str, str], ...] = (
 # ── Layout geometry constants ────────────────────────────────────────────────
 # Pixel heights of each widget row type as rendered by Bokeh.
 # Defined once here and used consistently in both __init__ (figs_height calc)
-# and _build_layout (top spacer), so the two sides can never drift out of sync.
+# and _build_layout, so all sides are computed from the same constants.
 _H_ROW_SELECT   = 60   # logo + x/y/color selects row
 _H_ROW_SLIDER   = 60   # any slider row (main sliders or per-panel size/alpha)
 _H_ROW_CHECKBOX = 45   # CheckboxButtonGroup row
 _H_ROW_OVERLAY  = 60   # overlay checkboxes + sliders combined row
 _H_PANEL_CTRL   = 95   # per side-panel control overhead (select ~35 + slider row ~60)
                            # kept for reference; not subtracted from figs_height
+_H_TEXT_INFO    = 50   # text information div at top of right column
+_H_HIST         = 140  # histogram row height
 
 
 # ── TrappyCore ────────────────────────────────────────────────────────────────
@@ -76,16 +86,25 @@ class TrappyCore:
         Provides ``cell.dfs["tracks"]`` (DataFrame with a ``gframe`` column)
         and ``cell.scopeid`` (string label).
     width, height : int
-        Pixel dimensions of the main figure.
-    figs_width, figs_height : int
-        Pixel dimensions of each side figure.
-        ``figs_height`` defaults to ``height // 3``.
+        Pixel dimensions of the main (left-column) figure.
+        The right column automatically matches:
+          ``_figs_width  = width``   — equal halves of total canvas width.
+          ``_figs_height = (height + 35) // n_side - _H_PANEL_CTRL``
+                         — each side panel sized so both columns are the same
+                           total height, accounting for text-info, hist row,
+                           and per-panel control overhead.
     filtered_columns : dict
         Mapping of label → [x_col, y_col] used to build overlay checkboxes.
         Pass ``{}`` (default) to suppress checkboxes.
     side_cols : sequence of (str, str)
         Pairs of (data_column, display_label) for the side panels.
         The number of pairs controls how many side figures are created.
+    hist_cols : sequence of str
+        Column names for the histogram figures in the right-column header row.
+        Defaults to the first ``n_hists`` numeric columns in the dataframe.
+        Pass fewer than ``n_hists`` names; remainder become blank placeholders.
+    n_hists : int
+        Number of histogram figures to create (default 5).
     """
 
     def __init__(
@@ -93,11 +112,11 @@ class TrappyCore:
         cell,
         width: int = 1000,
         height: int = 1000,
-        figs_width: int = 140 * 5,
-        figs_height: Optional[int] = None,
         default_xycols: Sequence[str] = ("x", "y"),
         filtered_columns: dict = {},
         side_cols: Sequence[Tuple[str, str]] = _DEFAULT_SIDE_COLS,
+        hist_cols: Optional[Sequence[str]] = None,
+        n_hists: int = 5,
     ) -> None:
         # ── 1. Data ───────────────────────────────────────────────────────────
         self._load_cell(cell)
@@ -105,37 +124,56 @@ class TrappyCore:
         # ── 2. Dimensions (stored for use in figure/layout builders) ──────────
         self._width      = width
         self._height     = height
-        self._figs_width = figs_width
+
+        # Right column is the same pixel width as the left — equal halves of
+        # the total canvas. Widgets inside scale to self._figs_width.
+        self._figs_width = width
 
         # Stored before _build_widgets so _build_selects can read them.
         self.default_xycols: list[str] = list(default_xycols)
         self.filtered_columns = dict(filtered_columns)
         self.side_cols = list(side_cols)
 
+        # Histogram column names: default to the first n_hists numeric columns.
+        self._n_hists = n_hists
+        if hist_cols is not None:
+            self._hist_cols: list[str] = list(hist_cols)[:n_hists]
+        else:
+            numeric_cols = [
+                c for c in self.columns
+                if self.df[c].dtype.kind in "iufcb"
+            ]
+            self._hist_cols = numeric_cols[:n_hists]
+
         # frame_col is set by each view method before _finalize; initialise here.
         self.frame_col: str = "gframe_"
 
-        # Compute the total pixel height of the left-column widget rows that sit
-        # above self.fig. This drives the right-column top spacer in _build_layout
-        # so both sides are computed from the same constants.
+        # Total pixel height of the left-column widget rows above self.fig.
         _has_overlay = bool(filtered_columns)
         self._controls_h = (
             _H_ROW_SELECT       # logo + x/y/color selects
             + _H_ROW_SLIDER     # alpha / size / split sliders
-            + _H_ROW_CHECKBOX   # raw checkboxes
+            + _H_ROW_CHECKBOX   # raw + trap/fov checkboxes (same row)
             + (_H_ROW_OVERLAY if _has_overlay else 0)  # overlay row (if present)
         )
 
-        # Auto-compute side-figure height by dividing the main figure height equally.
-        # Each panel figure gets height // n_side pixels — a clean fraction of the
-        # main figure. The per-panel control rows (select + sliders, ~_H_PANEL_CTRL px)
-        # add overhead that extends the right column slightly below the main figure,
-        # which is an acceptable trade-off for conveniently sized side panels.
+        # Derive side-figure height so both columns share the same total height.
+        #
+        # Left  total = _controls_h + height
+        # Right total = _H_TEXT_INFO + _H_HIST + n_side × (_H_PANEL_CTRL + figs_height)
+        #
+        # Setting Left == Right and solving:
+        #   figs_height = (_controls_h + height - _H_TEXT_INFO - _H_HIST) // n_side
+        #                 - _H_PANEL_CTRL
+        #
+        # Falls back to height // 3 when no side panels are defined.
         n_side = len(side_cols)
-        if figs_height is not None:
-            self._figs_height = figs_height
-        elif n_side > 0:
-            self._figs_height = max(80, height // n_side)
+        if n_side > 0:
+            self._figs_height = max(
+                80,
+                (self._controls_h + height - _H_TEXT_INFO - _H_HIST) // n_side
+                - _H_PANEL_CTRL,
+            )
         else:
             self._figs_height = height // 3
 
@@ -167,7 +205,8 @@ class TrappyCore:
     # ── Figure factory ────────────────────────────────────────────────────────
 
     def _build_figures(self) -> None:
-        """Create ``self.fig`` (main) and ``self.side_figs`` (side panels)."""
+        """Create ``self.fig`` (main), ``self.hist_figs`` (histogram row),
+        and ``self.side_figs`` (side panels)."""
 
         self.fig = figure(
             width=self._width,
@@ -182,6 +221,20 @@ class TrappyCore:
         for tool in self.fig.tools:
             if hasattr(tool, "match_aspect"):
                 tool.match_aspect = True
+
+        # Histogram figures — one per hist_col, laid out as a row in the right
+        # column header. Width divides the right-column budget equally.
+        hist_w = max(80, self._figs_width // self._n_hists)
+        self.hist_figs: list = [
+            figure(
+                width=hist_w,
+                height=_H_HIST,
+                title=col if col else "",
+                toolbar_location=None,
+                output_backend="webgl",
+            )
+            for col in (self._hist_cols + [""] * (self._n_hists - len(self._hist_cols)))
+        ]
 
         self.side_figs: list = [
             figure(
@@ -222,9 +275,11 @@ class TrappyCore:
         self._build_side_selects()
         self._build_side_style_sliders()
         self._build_raw_checkboxes()
+        self._build_trap_fov_checkboxes()
         self._build_checkboxes()
         self._build_overlay_sliders()
         self._build_logo()
+        self._build_text_info()
 
     def _build_sliders(self) -> None:
         """Create alpha, size, and split sliders. Callbacks are wired later by
@@ -527,6 +582,96 @@ class TrappyCore:
         )
         self.raw_checkboxes.js_on_change("active", cb)
 
+    def _build_trap_fov_checkboxes(self) -> None:
+        """
+        Create the trap-boundary / FOV-image toggle checkboxes.
+        These sit beside raw_checkboxes in the same row.
+        Callbacks are wired by _wire_trap_fov_checkboxes(), called from
+        _finalize() after view-specific renderers (trap circle, fov image)
+        have been added to self.fig by the relevant view method.
+        Both are inactive by default; activate only when renderers exist.
+        """
+        self.trap_fov_checkboxes = CheckboxButtonGroup(
+            labels=["Trap boundary", "FOV image"],
+            active=[],
+        )
+
+    def _wire_trap_fov_checkboxes(
+        self,
+        trap_renderer=None,
+        fov_renderer=None,
+    ) -> None:
+        """
+        Wire trap_fov_checkboxes to toggle trap_renderer (index 0) and
+        fov_renderer (index 1) on self.fig.
+
+        Parameters
+        ----------
+        trap_renderer : Bokeh renderer, optional
+            The trap-boundary glyph renderer (e.g. an Ellipse or Circle).
+        fov_renderer : Bokeh renderer, optional
+            The FOV image renderer (e.g. an ImageRGBA or ImageURL).
+
+        If either renderer is None the corresponding checkbox is disabled so
+        the user cannot toggle a non-existent element.
+        """
+        self.trap_fov_checkboxes.js_property_callbacks.pop("change:active", None)
+
+        active = []
+        renderers = []
+        if trap_renderer is not None:
+            active.append(0)
+            renderers.append(trap_renderer)
+        if fov_renderer is not None:
+            active.append(1)
+            renderers.append(fov_renderer)
+
+        self.trap_fov_checkboxes.active = active
+        self.trap_fov_checkboxes.disabled = len(renderers) == 0
+
+        if not renderers:
+            return
+
+        cb = CustomJS(
+            args=dict(
+                trap=trap_renderer,
+                fov=fov_renderer,
+            ),
+            code="""
+            const active = new Set(cb_obj.active);
+            if (trap !== null) trap.visible = active.has(0);
+            if (fov  !== null) fov.visible  = active.has(1);
+            """,
+        )
+        self.trap_fov_checkboxes.js_on_change("active", cb)
+
+    def _build_text_info(self) -> None:
+        """
+        Create the text information Div shown at the top of the right column.
+        Content is updated by each view method via self.update_text_info().
+        """
+        self.text_info = Div(
+            text="<b>trappytv</b> — no view loaded",
+            width=self._figs_width,
+            height=_H_TEXT_INFO,
+            styles={"font-size": "13px", "line-height": "1.5",
+                    "padding": "6px 8px", "overflow": "hidden"},
+        )
+
+    def update_text_info(self, html: str) -> None:
+        """
+        Update the text information panel with arbitrary HTML.
+        Call from view methods or externally after rendering.
+
+        Example
+        -------
+        tv.update_text_info(
+            f"<b>{cell.scopeid}</b> &nbsp;|&nbsp; split {split_val} "
+            f"&nbsp;|&nbsp; {len(df)} points"
+        )
+        """
+        self.text_info.text = html
+
     def _build_checkboxes(self) -> None:
         n = len(self.filtered_columns)
         self.checkboxes: Optional[CheckboxButtonGroup] = (
@@ -543,16 +688,27 @@ class TrappyCore:
     def _build_layout(self) -> None:
         """Assemble the two-column layout from widgets and figures.
 
-        Heights are derived from the module-level _H_* constants, which are also
-        used in __init__ to compute self._controls_h and self._figs_height.
-        This guarantees the right-column top spacer and left-column control rows
-        stay in sync without any hardcoded magic numbers here.
+        Left column
+        -----------
+        Row 1 : logo | x_select  y_select  color_select
+        Row 2 : alpha_slider  size_slider  split_slider
+        Row 3 : raw_checkboxes | trap_fov_checkboxes
+        Row 4 : checkboxes (filtered cols) | overlay_size_slider  overlay_alpha_slider
+                (row 4 omitted when filtered_columns is empty)
+        Row 5 : fig  (main figure)
+
+        Right column
+        ------------
+        Row 1 : text_info  (Div — scopeid / split / point count)
+        Row 2 : hist1  hist2  hist3  hist4  hist5
+        Row N : [select  size_slider  alpha_slider]  ← per side panel
+                fig                                   ← per side panel
         """
         # ── Left column ───────────────────────────────────────────────────────
         left = [
             row(self.logo_div, Spacer(width=20), self.x_select, self.y_select, self.color_select),
             row(self.alpha_slider, self.size_slider, self.split_slider),
-            self.raw_checkboxes,
+            row(self.raw_checkboxes, self.trap_fov_checkboxes),
         ]
         if self.checkboxes is not None:
             overlay_row_widgets = [self.checkboxes]
@@ -562,9 +718,10 @@ class TrappyCore:
         left.append(self.fig)
 
         # ── Right column ──────────────────────────────────────────────────────
-        # self._controls_h matches the total height of the left-column widget rows
-        # above self.fig (computed in __init__ from the same _H_* constants).
-        right: list = [Spacer(width=self._figs_width, height=self._controls_h)]
+        right: list = [
+            self.text_info,
+            row(*self.hist_figs),
+        ]
         for size_sl, alpha_sl, sel, fig in zip(
             self.side_size_sliders, self.side_alpha_sliders,
             self.side_selects, self.side_figs,

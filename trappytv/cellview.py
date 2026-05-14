@@ -181,9 +181,10 @@ class CellView:
         if df is None:
             return
 
-        if "speed" in df.columns:
-            self._log("SPEED", "already present")
-            return
+        ## Compute speed esentially recomputes speed.
+        #if "speed" in df.columns:
+        #    self._log("SPEED", "already present")
+        #    return
 
         x, y = self.xycols
 
@@ -196,7 +197,7 @@ class CellView:
             dy = np.gradient(g[y])
             return np.hypot(dx, dy)
 
-        if "particle" in df.columns:
+        if "scopeid" in df.columns:
             group_cols = [
                 c for c in ["scopeid", "split", "particle"] if c in df.columns
             ]
