@@ -26,7 +26,7 @@ import pandas as pd
 from bokeh.models import ColumnDataSource, CustomJS, HoverTool
 from bokeh.palettes import Category20, Turbo256
 from bokeh.transform import transform
-
+from bokeh.models import LinearColorMapper
 from .trappycore import TrappyCore, _DEFAULT_SIDE_COLS
 
 HoverBuilder = Callable[[Sequence[str]], Sequence[Tuple[str, str]]]
@@ -409,6 +409,11 @@ class TrappyTV(TrappyCore):
                     # no data re-serialisation.
                     self._wire_overlay_sliders()
 
+        # FOV checkbox — wired here so all view modes benefit.
+        # _add_fov() is idempotent and is called before _finalize in every view
+        # method; self.fov_renderer is None when no FOV was loaded.
+        self._wire_trap_fov_checkboxes(fov_renderer=self.fov_renderer)
+
         self.display()
 
     # ── View modes ────────────────────────────────────────────────────────────
@@ -479,6 +484,13 @@ class TrappyTV(TrappyCore):
         self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
         self._render_sides(self.source, frame_col=frame_col)
 
+        # ── Histograms ────────────────────────────────────────────────────────
+        # Pre-compute once in Python for all splits; JS will pick the right
+        # entry on every slider change without a Python round-trip.
+        all_hist_data = self._precompute_split_hists()
+        initial_key   = str(int(initial_split_val))
+        hist_sources  = self._render_hists(all_hist_data, initial_key)
+
         # ── Split slider callback ─────────────────────────────────────────────
         # split_values is a Python list serialised into JS as an array.
         # The slider value is an index (0...N-1); we look up the actual split value.
@@ -496,6 +508,8 @@ class TrappyTV(TrappyCore):
                 overlay_sources=self.overlay_sources,
                 overlay_xcols=overlay_xcols,
                 overlay_ycols=overlay_ycols,
+                hist_sources=hist_sources,
+                all_hist_data=all_hist_data,
             ),
             code="""
             const idx       = Math.round(cb_obj.value);
@@ -529,10 +543,21 @@ class TrappyTV(TrappyCore):
                 };
             }
 
+            // Update pre-computed histogram sources for this split.
+            const hist_key = String(Math.round(split_val));
+            if (all_hist_data[hist_key] !== undefined) {
+                for (let i = 0; i < hist_sources.length; i++) {
+                    if (all_hist_data[hist_key][i] !== undefined) {
+                        hist_sources[i].data = all_hist_data[hist_key][i];
+                    }
+                }
+            }
+
             plot_title.text = 'trappytv \u2014 ' + scopeid + ' \u2014 split ' + split_val;
             """,
         )
 
+        self._add_fov()
         self._finalize(
             title=f"trappytv :: {self.scopeid} :: split {initial_split_val}",
             hover_columns=hover_columns,
@@ -579,6 +604,15 @@ class TrappyTV(TrappyCore):
         )
         self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
         self._render_sides(self.source, frame_col=frame_col, background_df=self.df)
+
+        # Histograms — full-df data ("all" key); split slider is disabled in this
+        # mode so there is no JS callback to wire. The histograms are static here.
+        all_hist_data = self._precompute_split_hists()
+        self._render_hists(all_hist_data, initial_key="all")
+
+        # FOV — idempotent; safe to call on every view_all invocation.
+        self._add_fov()
+
         self._finalize(
             title=f"trappytv :: {self.scopeid} :: full view (every {sample}th point)",
             hover_columns=hover_columns,
@@ -657,6 +691,14 @@ class TrappyTV(TrappyCore):
             fig.renderers = []
             fig.scatter(x="x", y="y", source=_blank, alpha=0, size=0)
 
+        # ── Histograms ────────────────────────────────────────────────────────
+        all_hist_data = self._precompute_split_hists()
+        initial_key   = str(int(prep["initial_split"]))
+        hist_sources  = self._render_hists(all_hist_data, initial_key)
+
+        # ── FOV ───────────────────────────────────────────────────────────────
+        self._add_fov()
+
         # ── Split slider callback ─────────────────────────────────────────────
         split_cb = CustomJS(
             args=dict(
@@ -665,6 +707,8 @@ class TrappyTV(TrappyCore):
                 speed_source=self.speed_source,
                 all_speed=all_speed,
                 plot_title=self.fig.title,
+                hist_sources=hist_sources,
+                all_hist_data=all_hist_data,
             ),
             code="""
             const split_val = Number(cb_obj.value);
@@ -684,6 +728,16 @@ class TrappyTV(TrappyCore):
             if (sd !== undefined) {
                 speed_source.data = { xs: sd['xs'], ys: sd['ys'], colors: sd['colors'] };
             }
+
+            // Update pre-computed histogram sources for this split.
+            if (all_hist_data[split_key] !== undefined) {
+                for (let i = 0; i < hist_sources.length; i++) {
+                    if (all_hist_data[split_key][i] !== undefined) {
+                        hist_sources[i].data = all_hist_data[split_key][i];
+                    }
+                }
+            }
+
             plot_title.text = 'trappytv \u2014 ensemble \u2014 split ' + split_key;
             """,
         )
@@ -783,3 +837,208 @@ class TrappyTV(TrappyCore):
             "initial":       initial,
             "init_speed":    init_speed,
         }
+
+    def _precompute_split_hists(self) -> dict:
+        """
+        Pre-compute VBar data for every split (and the full df under key "all").
+
+        The output is a plain Python dict that Bokeh's CustomJS serialiser can
+        embed directly into a JS callback, exactly as ``all_speed`` is handled
+        in view_ensemble.
+
+        Returns
+        -------
+        all_hist_data : dict
+            ``{split_key: [data_dict_per_hist_fig, ...]}``.
+            *split_key* is ``str(int(split_val))`` or ``"all"``.
+            Each inner list has exactly ``self._n_hists`` entries; unused figures
+            receive empty arrays so the JS update loop stays uniform.
+
+        Data dict shapes
+        ----------------
+        Figures 0 & 1 (subpixel bias):   ``{bins: [...], top: [...]}``
+        Figures 2 +   (filter residuals): ``{xbins:[…], xtop:[…], ybins:[…], ytop:[…]}``
+        """
+        from .extraplots import subpix_hist, residual_hist
+
+        # Detect unrefined / raw position columns (new spec name first).
+        x_base = next((c for c in ("x_ur", "x_unrefined") if c in self.columns), None)
+        y_base = next((c for c in ("y_ur", "y_unrefined") if c in self.columns), None)
+
+        # Valid filtered-column pairs available in self.df.
+        valid_fc = [
+            (label, cols[0], cols[1])
+            for label, cols in self.filtered_columns.items()
+            if cols[0] in self.columns and cols[1] in self.columns
+        ]
+
+        # Build per-split sub-frames plus the "all" frame.
+        if "split" in self.df.columns:
+            groups: dict = {str(int(s)): self.df[self.df["split"] == s]
+                            for s in self.split_values}
+        else:
+            groups = {}
+        groups["all"] = self.df
+
+        # ── Helper functions ──────────────────────────────────────────────────
+        def _subpix(col: str, sub) -> dict:
+            try:
+                arr = sub[col].dropna().to_numpy(dtype=float)
+                top, bins = subpix_hist(arr)
+                return dict(bins=list(bins), top=list(top))
+            except Exception:
+                return dict(bins=[], top=[])
+
+        def _residual(xf_col: str, yf_col: str, sub) -> dict:
+            try:
+                needed = [x_base, y_base, xf_col, yf_col]
+                clean  = sub[needed].dropna()
+                rx = clean[x_base].to_numpy() - clean[xf_col].to_numpy()
+                ry = clean[y_base].to_numpy() - clean[yf_col].to_numpy()
+                hx, bx = residual_hist(rx)
+                hy, by = residual_hist(ry)
+                return dict(xbins=list(bx), xtop=list(hx), ybins=list(by), ytop=list(hy))
+            except Exception:
+                return dict(xbins=[], xtop=[], ybins=[], ytop=[])
+
+        _empty_sub = dict(bins=[], top=[])
+        _empty_res = dict(xbins=[], xtop=[], ybins=[], ytop=[])
+
+        # ── Compute ───────────────────────────────────────────────────────────
+        all_hist_data: dict = {}
+        for key, sub in groups.items():
+            fig_data: list = []
+
+            # fig 0 — subpixel bias x
+            fig_data.append(_subpix(x_base, sub) if x_base else _empty_sub.copy())
+
+            # fig 1 — subpixel bias y
+            fig_data.append(_subpix(y_base, sub) if y_base else _empty_sub.copy())
+
+            # fig 2 … — residuals per valid filtered column
+            for i, (_, xf_col, yf_col) in enumerate(valid_fc):
+                if 2 + i >= self._n_hists:
+                    break
+                if x_base and y_base:
+                    fig_data.append(_residual(xf_col, yf_col, sub))
+                else:
+                    fig_data.append(_empty_res.copy())
+
+            # Pad to self._n_hists so the JS update loop can index uniformly.
+            while len(fig_data) < self._n_hists:
+                fig_data.append(_empty_sub.copy())
+
+            all_hist_data[key] = fig_data
+
+        return all_hist_data
+
+    def _render_hists(self, all_hist_data: dict, initial_key: str) -> list:
+        """
+        Clear hist_figs and populate them from pre-computed data, using
+        .vbar(..., source=) so that each figure's ColumnDataSource can be
+        updated from a JS split-slider callback without a Python round-trip.
+
+        Parameters
+        ----------
+        all_hist_data : dict
+            Output of _precompute_split_hists().
+        initial_key : str
+            The split key (e.g. "0" or "all") whose data to display first.
+
+        Returns
+        -------
+        hist_sources : list[ColumnDataSource]
+            One source per hist_fig.  Store these on self and pass them (along
+            with all_hist_data) to the split-slider CustomJS callback.
+        """
+        from bokeh.palettes import Dark2_5 as palette
+
+        x_base = next((c for c in ("x_ur", "x_unrefined") if c in self.columns), None)
+        y_base = next((c for c in ("y_ur", "y_unrefined") if c in self.columns), None)
+
+        valid_fc = [
+            (label, cols[0], cols[1])
+            for label, cols in self.filtered_columns.items()
+            if cols[0] in self.columns and cols[1] in self.columns
+        ]
+
+        # Use the requested initial key, fall back to "all".
+        initial_data = all_hist_data.get(initial_key, all_hist_data.get("all", []))
+
+        hist_sources: list = []
+
+        for i, fig in enumerate(self.hist_figs):
+            fig.renderers = []          # clear any previous render
+
+            init   = initial_data[i] if i < len(initial_data) else {}
+            source = ColumnDataSource(init)
+            hist_sources.append(source)
+
+            if i == 0 and x_base:
+                fig.vbar(x="bins", top="top", bottom=0, width=0.08,
+                         fill_color="#b3de69", source=source)
+                fig.title.text       = f"subpix_bias({x_base})"
+                fig.x_range.bounds   = (0, 1)
+
+            elif i == 1 and y_base:
+                fig.vbar(x="bins", top="top", bottom=0, width=0.08,
+                         fill_color="#b3de69", source=source)
+                fig.title.text       = f"subpix_bias({y_base})"
+                fig.x_range.bounds   = (0, 1)
+
+            elif 2 <= i < 2 + len(valid_fc):
+                label = valid_fc[i - 2][0]
+                fig.vbar(x="xbins", top="xtop", bottom=0, width=0.01,
+                         fill_color=palette[0], fill_alpha=0.3, line_color=None,
+                         source=source)
+                fig.vbar(x="ybins", top="ytop", bottom=0, width=0.01,
+                         fill_color=palette[1], fill_alpha=0.3, line_color=None,
+                         source=source)
+                fig.title.text = f"residual: {label}"
+
+            # else: blank placeholder — leave fig.renderers empty
+
+        self.hist_sources = hist_sources
+        return hist_sources
+
+    def _add_fov(self):
+        """
+        Add the FOV image to self.fig exactly once (idempotent).
+
+        On first call the image glyph is created with ``visible=False``; the
+        "FOV image" checkbox (wired in _finalize via _wire_trap_fov_checkboxes)
+        toggles it.  Because the renderer is static and not connected to any
+        ColumnDataSource, the split slider — which only mutates
+        display_source.data — can never trigger a re-render.
+
+        Subsequent calls return the cached renderer without touching self.fig.
+
+        Returns
+        -------
+        renderer : GlyphRenderer or None
+        """
+        # Already in the figure — return the cached handle.
+        existing = getattr(self, "fov_renderer", None)
+        if existing is not None and existing in self.fig.renderers:
+            return existing
+
+        if self.fov is None:
+            self.fov_renderer = None
+            return None
+
+        img = self.fov.astype(float)
+        h, w = img.shape[:2]
+
+        color_mapper = LinearColorMapper(
+            low=float(img.min()), high=float(img.max()), palette="Greys256"
+        )
+        renderer = self.fig.image(
+            image=[img], x=0, y=0, dw=w, dh=h,
+            color_mapper=color_mapper,
+            level="image",
+            visible=False,   # hidden until the user enables the checkbox
+        )
+        self.fov_renderer = renderer
+        return renderer
+
+

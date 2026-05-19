@@ -200,8 +200,18 @@ class TrappyCore:
         self.split_no: int = 0
 
         # Canonical column list — kept in sync with self.df after _load_cell.
+        self.fov = None
         self.columns: list[str] = list(self.df.columns)
+        if cell.fov is not None:
+            self.fov = cell.fov.copy()
 
+        # fov_renderer: set by _add_fov() the first time any view mode is shown.
+        # Persists across view-mode switches; the split slider never touches it.
+        self.fov_renderer = None
+
+        # hist_sources: list of ColumnDataSources, one per hist_fig.
+        # Repopulated by _render_hists() on every view call.
+        self.hist_sources: list = []
     # ── Figure factory ────────────────────────────────────────────────────────
 
     def _build_figures(self) -> None:

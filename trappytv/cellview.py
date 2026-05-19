@@ -1,28 +1,32 @@
 import os
 import numpy as np
 import pandas as pd
+import h5py
 
 
 class CellView:
+    """
+    Reads a Trappy-Scope cell-set HDF5 file as defined in the Cell Atlas spec.
+
+    A cell set contains up to five components (§3):
+        tracks    – trajectory DataFrame              (HDF key: "df")
+        xyr       – trap-centre trajectory            (HDF key: "xyr" or "xyr/{eid}")
+        metadata  – microscope / sample attrs         (h5py attrs on "metadata" or "metadata/{eid}")
+        fov       – first-frame snapshot              (HDF dataset "fov" or "fov/{eid}")
+        counts    – cell counts per split [optional]  (HDF key: "counts")
+
+    Single-cell vs. ensemble is auto-detected via the §5.1 discriminant:
+        ensemble ⟺ hf["metadata"] is an h5py.Group with no top-level attrs.
+    """
+
     def __init__(
         self,
         datapath,
-        xycols=("x_unrefined", "y_unrefined"),
-        keymap=None,
+        xycols=("x_unrefined", "y_unrefined"),   # §5.2 column names
         compute_speed=True,
         verbose=True,
         protected_cols=None,
     ):
-        """
-        keymap: dict with logical -> HDF key
-            defaults:
-                tracks   -> "df" (explicit default, with fallback)
-                metadata -> ["metadata","meta","tracks/meta","/tracks/meta/"]
-                xyr_df   -> "xyr_df"
-
-            if any entry is None => feature disabled
-        """
-
         self.xycols = xycols
         self.compute_speed_flag = compute_speed
         self.verbose = verbose
@@ -38,85 +42,61 @@ class CellView:
             else base_protected | set(protected_cols)
         )
 
-        # =========================================================
-        # KEYMAP (explicit default: "df")
-        # =========================================================
-        default_keymap = {
-            "tracks": "df",
-            "metadata": ["metadata", "meta", "tracks/meta", "/tracks/meta/"],
-            "xyr_df": "xyr_df",
-        }
-        self.keymap = {**default_keymap, **(keymap or {})}
-
         self._log("INIT", f"datapath={datapath}")
         self._log("PROTECTED", self.protected)
 
         # =========================================================
-        # PATH HANDLING
+        # PATH RESOLUTION
+        # Single HDF5 file  -> use directly.
+        # Directory         -> <dir>/postprocess/merged_tracks.hd5
         # =========================================================
-        if datapath.endswith(".hd5"):
+        if datapath.endswith(".hd5") or datapath.endswith(".h5"):
+            self.hdf_path = datapath
             self.scopeid = "Trappy-Scope"
-            self.paths = {"tracks": datapath}
         else:
             self.scopeid = os.path.basename(datapath)[:2]
             pp = os.path.join(datapath, "postprocess")
-            self.paths = {
-                "tracks": os.path.join(pp, "merged_tracks.hd5"),
-                "xyr_df": os.path.join(pp, "xyr.hd5"),
-            }
+            self.hdf_path = os.path.join(pp, "merged_tracks.hd5")
 
             ff = os.path.join(pp, "first_frames.npy")
             if os.path.exists(ff):
                 self.first_frames = np.load(ff)
 
+        self._log("HDF_PATH", self.hdf_path)
+
         # =========================================================
-        # INSPECT HDF KEYS
+        # INSPECT PANDAS-VISIBLE HDF KEYS
         # =========================================================
-        self.hd5keys = []
-        with pd.HDFStore(self.paths["tracks"]) as store:
-            self.hd5keys = [k.lstrip("/") for k in store.keys()]
+        with pd.HDFStore(self.hdf_path, "r") as store:
+            self.hd5keys = {k.lstrip("/") for k in store.keys()}
 
         self._log("HDF_KEYS", self.hd5keys)
 
         # =========================================================
-        # RESOLVE MAIN KEY (explicit default + fallback)
+        # DETECT ENSEMBLE  (§5.1 discriminant)
         # =========================================================
-        requested = self.keymap["tracks"]
-
-        if requested is None:
-            self._log("SKIP", "tracks disabled")
-            self.main_key = None
-        elif requested in self.hd5keys:
-            self.main_key = requested
-        else:
-            self._log(
-                "WARN",
-                f"'{requested}' not found → fallback to 'tracks' if available",
-            )
-            if "tracks" in self.hd5keys:
-                self.main_key = "tracks"
-            else:
-                self._log("ERROR", "no valid tracks key found")
-                self.main_key = None
-
-        self._log("MAIN_KEY", self.main_key)
+        self.ensemble = self._detect_ensemble()
+        self._log("ENSEMBLE", self.ensemble)
 
         # =========================================================
-        # LOAD DATA
+        # LOAD ALL COMPONENTS
         # =========================================================
         self.dfs = {}
+        self.metadata = None
+        self.fov = None
+        self.counts = None
+
         self._load_tracks()
         self._load_xyr()
         self._load_metadata()
+        self._load_fov()
+        self._load_counts()
 
         # =========================================================
         # SPEED
         # =========================================================
         if self.compute_speed_flag:
             self._compute_speed()
-
-        ## Add Stuff
-        self.stuff = {}
 
     # =========================================================
     # LOGGING
@@ -126,52 +106,143 @@ class CellView:
             print(f"[{stage}] {msg}")
 
     # =========================================================
+    # ENSEMBLE DETECTION  (§5.1)
+    # =========================================================
+    def _detect_ensemble(self):
+        """
+        ensemble ⟺ hf["metadata"] is an h5py.Group AND has no top-level attrs.
+        Returns False if "metadata" is absent (can't determine; assume single-cell).
+        """
+        try:
+            with h5py.File(self.hdf_path, "r") as hf:
+                if "metadata" not in hf:
+                    self._log("WARN", "no 'metadata' node; assuming single-cell")
+                    return False
+                return (
+                    isinstance(hf["metadata"], h5py.Group)
+                    and not hf["metadata"].attrs.keys()
+                )
+        except Exception as e:
+            self._log("WARN", f"ensemble detection failed: {e}")
+            return False
+
+    # =========================================================
     # LOADERS
     # =========================================================
     def _load_tracks(self):
-        if self.main_key is None:
-            return
+        """HDF key is always 'df' (§5.1 line 4). No fallback — a missing key
+        means the file is malformed."""
         try:
-            self.dfs["tracks"] = pd.read_hdf(
-                self.paths["tracks"], key=self.main_key
-            )
-            self._log("LOAD", "tracks loaded")
+            self.dfs["tracks"] = pd.read_hdf(self.hdf_path, key="tracks")
+            self._log("LOAD", f"tracks loaded ({len(self.dfs['tracks'])} rows)")
         except Exception as e:
             self._log("ERROR", f"tracks failed: {e}")
 
     def _load_xyr(self):
-        key = self.keymap.get("xyr_df")
-        if key is None:
-            self._log("SKIP", "xyr_df disabled")
-            return
-
+        """
+        §5.1:
+          single-cell  -> pd.read_hdf(path, key="xyr")          -> DataFrame
+          ensemble     -> {eid: pd.read_hdf(path, key="xyr/eid")} -> dict[str, DataFrame]
+        """
         try:
-            self.dfs["xyr_df"] = pd.read_hdf(self.paths["tracks"], key=key)
-            self._log("LOAD", "xyr_df loaded")
-        except Exception:
-            self._log("WARN", "xyr_df missing")
+            with h5py.File(self.hdf_path, "r") as hf:
+                if "xyr" not in hf:
+                    self._log("WARN", "xyr not found")
+                    return
+
+                if self.ensemble:
+                    eids = list(hf["xyr"].keys())
+                    self.dfs["xyr"] = {
+                        eid: pd.read_hdf(self.hdf_path, key=f"xyr/{eid}")
+                        for eid in eids
+                    }
+                    self._log("LOAD", f"xyr loaded for eids: {eids}")
+                else:
+                    self.dfs["xyr"] = pd.read_hdf(self.hdf_path, key="xyr")
+                    self._log("LOAD", "xyr loaded")
+        except Exception as e:
+            self._log("WARN", f"xyr failed: {e}")
 
     def _load_metadata(self):
-        keys = self.keymap.get("metadata")
-        if keys is None:
-            self._log("SKIP", "metadata disabled")
-            return
-
-        if isinstance(keys, str):
-            keys = [keys]
-
-        self.metadata = None
-
-        for k in keys:
-            if k.strip("/") in self.hd5keys:
-                try:
-                    self.metadata = pd.read_hdf(self.paths["tracks"], key=k)
-                    self._log("LOAD", f"metadata loaded ({k})")
+        """
+        §5.1: metadata lives in HDF5 *attrs*, not as a tabular dataset.
+          single-cell  -> dict(hf["metadata"].attrs)
+          ensemble     -> {eid: dict(hf["metadata/{eid}"].attrs)}
+        """
+        try:
+            with h5py.File(self.hdf_path, "r") as hf:
+                if "metadata" not in hf:
+                    self._log("WARN", "metadata not found")
                     return
-                except Exception:
-                    continue
 
-        self._log("WARN", "metadata not found")
+                if self.ensemble:
+                    eids = list(hf["metadata"].keys())
+                    self.metadata = {
+                        eid: dict(hf[f"metadata/{eid}"].attrs)
+                        for eid in eids
+                    }
+                    self._log("LOAD", f"metadata loaded for eids: {eids}")
+                else:
+                    self.metadata = dict(hf["metadata"].attrs)
+                    self._log("LOAD", "metadata loaded")
+        except Exception as e:
+            self._log("WARN", f"metadata failed: {e}")
+
+
+    def _load_fov(self):
+        """
+        single-cell  -> np.ndarray
+        ensemble     -> {eid: np.ndarray}
+        """
+        try:
+            with h5py.File(self.hdf_path, "r") as hf:
+                if "fov" not in hf:
+                    self._log("WARN", "fov not found")
+                    return
+
+                fov_node = hf["fov"]
+
+                if self.ensemble:
+                    if not isinstance(fov_node, h5py.Group):
+                        raise TypeError("'fov' should be a group in ensemble mode")
+
+                    self.fov = {
+                        eid: fov_node[eid][()]
+                        for eid in fov_node.keys()
+                        if isinstance(fov_node[eid], h5py.Dataset)
+                    }
+                    self._log("LOAD", f"fov loaded for eids: {list(self.fov.keys())}")
+
+                else:
+                    if isinstance(fov_node, h5py.Dataset):
+                        self.fov = fov_node[()]
+                    elif isinstance(fov_node, h5py.Group):
+                        # if single image stored inside group, take first dataset
+                        first_key = next(iter(fov_node.keys()))
+                        self.fov = fov_node[first_key][()]
+                    else:
+                        raise TypeError("Unsupported fov node type")
+
+                    self._log("LOAD", f"fov loaded (shape={self.fov.shape})")
+
+        except Exception as e:
+            self._log("WARN", f"fov failed: {e}")
+
+    def _load_counts(self):
+        """
+        §3 / §5.1: optional; single DataFrame regardless of ensemble type.
+        Checks both the h5py tree and the pandas store (covers both storage styles).
+        """
+        try:
+            with h5py.File(self.hdf_path, "r") as hf:
+                in_h5 = "counts" in hf
+            if in_h5 or "counts" in self.hd5keys:
+                self.counts = pd.read_hdf(self.hdf_path, key="counts")
+                self._log("LOAD", f"counts loaded ({len(self.counts)} rows)")
+            else:
+                self._log("SKIP", "counts not present")
+        except Exception as e:
+            self._log("WARN", f"counts failed: {e}")
 
     # =========================================================
     # SPEED COMPUTATION
@@ -181,72 +252,61 @@ class CellView:
         if df is None:
             return
 
-        ## Compute speed esentially recomputes speed.
-        #if "speed" in df.columns:
-        #    self._log("SPEED", "already present")
-        #    return
-
         x, y = self.xycols
-
         if x not in df.columns or y not in df.columns:
-            self._log("WARN", "speed skipped (missing xy columns)")
+            self._log("WARN", f"speed skipped (missing xy columns: {x!r}, {y!r})")
             return
 
         def compute(g):
-            dx = np.gradient(g[x])
-            dy = np.gradient(g[y])
+            dx = np.gradient(g[x].values)
+            dy = np.gradient(g[y].values)
             return np.hypot(dx, dy)
 
-        if "scopeid" in df.columns:
-            group_cols = [
-                c for c in ["scopeid", "split", "particle"] if c in df.columns
-            ]
+        # §2: single-cell groups by [split, particle]; ensemble adds scopeid (and eid).
+        group_cols = [c for c in ["scopeid", "eid", "split", "particle"] if c in df.columns]
 
-            if group_cols:
-                self._log("SPEED", f"grouped: {group_cols}")
-                df["speed"] = (
-                    df.groupby(group_cols, group_keys=False)
-                    .apply(lambda g: pd.Series(compute(g), index=g.index))
-                )
-            else:
-                self._log("SPEED", "particle present but no grouping cols")
-                df["speed"] = compute(df)
+        if group_cols:
+            self._log("SPEED", f"grouped by: {group_cols}")
+            df["speed"] = df.groupby(group_cols, group_keys=False).apply(
+                lambda g: pd.Series(compute(g), index=g.index)
+            )
         else:
-            self._log("SPEED", "global")
+            self._log("SPEED", "global (no grouping columns found)")
             df["speed"] = compute(df)
+
+        self.dfs["tracks"] = df
 
     # =========================================================
     # API
     # =========================================================
     def add_columns(self, inputs, func, outputs, *args, inplace=True, **kwargs):
         """
-        inplace: if True, func returns a new dataframe, otherwise it returns columns to be added to the dataframe.
+        Apply *func* to the tracks DataFrame and store the result.
+
+        inplace=True  – func returns a complete replacement DataFrame.
+        inplace=False – func returns only the new columns; they are merged in.
         """
         df = self.dfs["tracks"]
-
-        res = func(df, *args, inputs=inputs, outputs=outputs, **kwargs) if not inplace else func(df, *args, inputs=inputs, outputs=outputs, **kwargs)
-        self._log("ADD_COL", f"{inputs} -> {list(set(res.columns) - set(df.columns)) if inplace else list(res.columns)}")
+        res = func(df, *args, inputs=inputs, outputs=outputs, **kwargs)
 
         if inplace:
+            new_cols = list(set(res.columns) - set(df.columns))
+            self._log("ADD_COL", f"{inputs} -> {new_cols}")
             self.dfs["tracks"] = res.copy()
         else:
-            self.dfs["tracks"] = self.dfs["tracks"].merge(
-                                    res,
-                                    left_index=True,
-                                    right_index=True,
-                                    how="left",
-                                    suffixes=("", "_drop"))
-
-            self.dfs["tracks"] = self.dfs["tracks"].drop(columns=[c for c in self.dfs["tracks"].columns if c.endswith("_drop")])
+            self._log("ADD_COL", f"{inputs} -> {list(res.columns)}")
+            merged = df.merge(
+                res, left_index=True, right_index=True, how="left", suffixes=("", "_drop")
+            )
+            self.dfs["tracks"] = merged.drop(
+                columns=[c for c in merged.columns if c.endswith("_drop")]
+            )
 
     def filter(self, func):
         df = self.dfs["tracks"]
         before = len(df)
-
         self.dfs["tracks"] = df[func(df)]
-
-        after = len(self.dfs["tracks"])
-        self._log("FILTER", f"{before} -> {after}")
+        self._log("FILTER", f"{before} -> {len(self.dfs['tracks'])}")
 
     def keep_columns(self, cols):
         df = self.dfs["tracks"]
@@ -258,9 +318,7 @@ class CellView:
 
         keep = list((cols | self.protected) & set(df.columns))
         self.dfs["tracks"] = df[keep]
-
         self._log("TRIM", f"kept={keep}")
 
-    # =========================================================
     def __call__(self):
         return self.dfs.get("tracks")
