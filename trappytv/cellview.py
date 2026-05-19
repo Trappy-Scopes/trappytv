@@ -164,29 +164,19 @@ class CellView:
             self._log("WARN", f"xyr failed: {e}")
 
     def _load_metadata(self):
-        """
-        §5.1: metadata lives in HDF5 *attrs*, not as a tabular dataset.
-          single-cell  -> dict(hf["metadata"].attrs)
-          ensemble     -> {eid: dict(hf["metadata/{eid}"].attrs)}
-        """
-        try:
-            with h5py.File(self.hdf_path, "r") as hf:
-                if "metadata" not in hf:
-                    self._log("WARN", "metadata not found")
-                    return
+    try:
+        with pd.HDFStore(self.hdf_path, "r") as store:
+            if self.ensemble:
+                eids = [k.split("/")[-1] for k in store.keys() if k.startswith("/metadata/")]
+                self.metadata = {
+                    eid: store[f"/metadata/{eid}"].iloc[0].to_dict()
+                    for eid in eids
+                }
+            else:
+                self.metadata = store["/metadata"].iloc[0].to_dict()
 
-                if self.ensemble:
-                    eids = list(hf["metadata"].keys())
-                    self.metadata = {
-                        eid: dict(hf[f"metadata/{eid}"].attrs)
-                        for eid in eids
-                    }
-                    self._log("LOAD", f"metadata loaded for eids: {eids}")
-                else:
-                    self.metadata = dict(hf["metadata"].attrs)
-                    self._log("LOAD", "metadata loaded")
-        except Exception as e:
-            self._log("WARN", f"metadata failed: {e}")
+    except Exception as e:
+        self._log("WARN", f"metadata failed: {e}")
 
 
     def _load_fov(self):
