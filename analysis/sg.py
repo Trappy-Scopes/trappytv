@@ -1,6 +1,7 @@
 from hmac import new
 from scipy.signal import savgol_coeffs, filtfilt
 from copy import deepcopy
+import pandas as pd
 
 def savgol_filter_backandforth(x, window_length, polyorder, axis=-1):
     if window_length % 2 == 0:
