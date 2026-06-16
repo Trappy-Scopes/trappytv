@@ -23,7 +23,7 @@ from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
-from bokeh.models import ColumnDataSource, CustomJS, HoverTool
+from bokeh.models import Circle, ColumnDataSource, CustomJS, HoverTool
 from bokeh.palettes import Category20, Turbo256
 from bokeh.transform import transform
 from bokeh.models import LinearColorMapper
@@ -82,6 +82,9 @@ class TrappyTV(TrappyCore):
         side_cols: Sequence[Tuple[str, str]] = _DEFAULT_SIDE_COLS,
         hover_builder: Optional[HoverBuilder] = None,
         hover_columns: Optional[Sequence[str]] = None,
+        compute_hists: bool = True,
+        trap_radius_col: str = "rout",
+        scale_bar_unit: Optional[str] = None,
     ) -> None:
         super().__init__(
             cell=cell,
@@ -90,6 +93,9 @@ class TrappyTV(TrappyCore):
             default_xycols=default_xycols,
             filtered_columns=filtered_columns,
             side_cols=side_cols,
+            compute_hists=compute_hists,
+            trap_radius_col=trap_radius_col,
+            scale_bar_unit=scale_bar_unit,
         )
         # default_xycols is now stored on self by TrappyCore.__init__ before
         # _build_widgets runs, so the X/Y selects pick up the correct defaults.
@@ -103,6 +109,11 @@ class TrappyTV(TrappyCore):
         # cleared at the start of every view call via _clear_renderers override.
         self.overlay_renderers: list = []  # list of [line, scatter] pairs
         self.overlay_sources:   list = []  # one ColumnDataSource per valid overlay
+
+        # Histogram state -- populated by _render_hists on every view call.
+        # _hist_bin_info_js holds global bin edges (computed once from full df)
+        # used by the JS selection and split-slider callbacks.
+        self._hist_bin_info_js: dict = {}
 
     # ── Overlay clear / render / wire ─────────────────────────────────────────
 
@@ -312,16 +323,28 @@ class TrappyTV(TrappyCore):
         """
         self.other_scatters = []
 
-        for i, (fig, (y_col, label)) in enumerate(zip(self.side_figs, self.side_cols)):
-            fig.renderers        = []
+        for i, (fig, (y_col_default, label)) in enumerate(zip(self.side_figs, self.side_cols)):
+            fig.renderers = []
+
+            # Use the select's current value — it already defaults to a valid column
+            # at build time if the side_cols default doesn't exist in the data.
+            # Fall back to the side_cols default, then skip if neither exists.
+            sel_val = (
+                self.side_selects[i].value
+                if i < len(self.side_selects) and self.side_selects[i].value in self.df.columns
+                else y_col_default
+            )
+            y_col = sel_val if sel_val in self.df.columns else y_col_default
+
             fig.xaxis.axis_label = frame_col
             fig.yaxis.axis_label = y_col
-            # Title intentionally blank (task 3); the y-axis label carries the info.
 
             if y_col not in self.df.columns:
                 continue
 
-            if background_df is not None and frame_col in background_df.columns:
+            if (background_df is not None
+                    and frame_col in background_df.columns
+                    and y_col in background_df.columns):
                 fig.line(
                     x=background_df[frame_col], y=background_df[y_col],
                     color="gray", alpha=0.2, line_width=2, level="underlay",
@@ -409,10 +432,18 @@ class TrappyTV(TrappyCore):
                     # no data re-serialisation.
                     self._wire_overlay_sliders()
 
-        # FOV checkbox — wired here so all view modes benefit.
-        # _add_fov() is idempotent and is called before _finalize in every view
-        # method; self.fov_renderer is None when no FOV was loaded.
-        self._wire_trap_fov_checkboxes(fov_renderer=self.fov_renderer)
+        # FOV controls — wired here so all view modes benefit.
+        # _add_fov() is idempotent; self.fov_renderer / self._fov_renderers_dict
+        # are populated before _finalize is called.
+        self._wire_trap_fov_checkboxes(
+            trap_renderer=self.trap_renderer,
+            fov_renderer=self.fov_renderer,
+        )
+        self._wire_fov_select()
+
+        # Histogram selection callback — wired after every view call so it
+        # always points at the current self.source.
+        self._wire_hist_selection()
 
         self.display()
 
@@ -449,9 +480,25 @@ class TrappyTV(TrappyCore):
 
         # _clear_renderers also calls _clear_overlays and wipes the legend.
         self._clear_renderers()
-        self.split_no = split_no
 
-        initial_split_val = self.split_values[split_no]
+        # Resolve split_no: accept either an actual split VALUE (preferred)
+        # or a positional index into split_values.  Lets callers pass
+        # split_no=5 to mean "the split whose value is 5" — works correctly
+        # even when splits are discontinuous or don't start from zero.
+        if split_no in self.split_values:
+            initial_split_val = split_no
+            slider_idx        = self.split_values.index(split_no)
+        elif isinstance(split_no, int) and 0 <= split_no < len(self.split_values):
+            initial_split_val = self.split_values[split_no]
+            slider_idx        = split_no
+        else:
+            initial_split_val = self.split_values[0]
+            slider_idx        = 0
+
+        self.split_no           = slider_idx
+        self.split_slider.value = slider_idx
+        self.split_slider.title = f"Split ({initial_split_val})"
+
         initial_df = (
             self.df[self.df["split"] == initial_split_val]
             if "split" in self.df.columns
@@ -462,7 +509,6 @@ class TrappyTV(TrappyCore):
         # display_source (self.source): the currently visible split; rewritten by JS.
         self.full_source = ColumnDataSource(self.df)
         self.source      = ColumnDataSource(initial_df)
-        self.split_slider.value = split_no
 
         # ── Main trajectory glyphs ────────────────────────────────────────────
         color = transform(frame_col, self._make_color_mapper(frame_col))
@@ -485,11 +531,11 @@ class TrappyTV(TrappyCore):
         self._render_sides(self.source, frame_col=frame_col)
 
         # ── Histograms ────────────────────────────────────────────────────────
-        # Pre-compute once in Python for all splits; JS will pick the right
-        # entry on every slider change without a Python round-trip.
-        all_hist_data = self._precompute_split_hists()
-        initial_key   = str(int(initial_split_val))
-        hist_sources  = self._render_hists(all_hist_data, initial_key)
+        # Compute global bin edges once from the full df; pass to JS so the
+        # split callback and selection callback can bin in real time without
+        # serialising per-split counts.
+        bin_info     = self._compute_hist_bin_info()
+        hist_sources = self._render_hists(bin_info, initial_df)
 
         # ── Split slider callback ─────────────────────────────────────────────
         # split_values is a Python list serialised into JS as an array.
@@ -509,7 +555,12 @@ class TrappyTV(TrappyCore):
                 overlay_xcols=overlay_xcols,
                 overlay_ycols=overlay_ycols,
                 hist_sources=hist_sources,
-                all_hist_data=all_hist_data,
+                hist_specs=self._hist_specs,
+                bin_info=bin_info,
+                trap_source=self.trap_source,
+                xyr_source=self.xyr_source,
+                trap_radius_col=self._trap_radius_col,
+                split_slider=self.split_slider,
             ),
             code="""
             const idx       = Math.round(cb_obj.value);
@@ -543,20 +594,68 @@ class TrappyTV(TrappyCore):
                 };
             }
 
-            // Update pre-computed histogram sources for this split.
-            const hist_key = String(Math.round(split_val));
-            if (all_hist_data[hist_key] !== undefined) {
-                for (let i = 0; i < hist_sources.length; i++) {
-                    if (all_hist_data[hist_key][i] !== undefined) {
-                        hist_sources[i].data = all_hist_data[hist_key][i];
+
+            // Update trap boundary circle to this split.
+            if (trap_source !== null && xyr_source !== null && trap_radius_col !== null) {
+                const xyr = xyr_source.data;
+                const td  = { xc: [], yc: [], radius: [] };
+                if ('split' in xyr) {
+                    for (let i = 0; i < xyr['split'].length; i++) {
+                        if (Number(xyr['split'][i]) === Number(split_val)) {
+                            td.xc.push(xyr['xc'][i]);
+                            td.yc.push(xyr['yc'][i]);
+                            td.radius.push(xyr[trap_radius_col][i]);
+                        }
                     }
                 }
+                if (td.xc.length > 0) trap_source.data = td;
+            }
+            // Recompute histograms in JS from the new split data.
+            // Clear any lingering point selection so indices stay valid.
+            display_source.selected.indices = [];
+
+            function bin_vals(vals, bi, transform) {
+                const top = new Array(bi.n).fill(0); let count = 0;
+                for (let j = 0; j < vals.length; j++) {
+                    let v = Number(vals[j]); if (!isFinite(v)) continue;
+                    if (transform === 'frac') v = v - Math.floor(v);
+                    const b = Math.floor((v - bi.min) / bi.width);
+                    if (b >= 0 && b < bi.n) { top[b]++; count++; }
+                }
+                if (count > 0 && bi.width > 0)
+                    for (let b = 0; b < bi.n; b++) top[b] /= (count * bi.width);
+                return top;
             }
 
+            for (let i = 0; i < hist_specs.length; i++) {
+                const spec = hist_specs[i];
+                const bi   = bin_info[String(i)];
+                const hsrc = hist_sources[i];
+                if (!bi) continue;
+
+                if (spec.type === 'subpix') {
+                    if (!(spec.col in nd)) continue;
+                    hsrc.data = { left: bi.left, right: bi.right,
+                                  top: bin_vals(nd[spec.col], bi, 'frac') };
+
+                } else if (spec.type === 'residual') {
+                    if (!(spec.xraw in nd) || !(spec.xfilt in nd)) continue;
+                    const xr = nd[spec.xraw],  xf = nd[spec.xfilt];
+                    const yr = nd[spec.yraw],  yf = nd[spec.yfilt];
+                    const rx = new Array(xr.length), ry = new Array(yr.length);
+                    for (let j = 0; j < xr.length; j++) rx[j] = Number(xr[j]) - Number(xf[j]);
+                    for (let j = 0; j < yr.length; j++) ry[j] = Number(yr[j]) - Number(yf[j]);
+                    hsrc.data = { left: bi.left, right: bi.right,
+                                  xtop: bin_vals(rx, bi, 'id'),
+                                  ytop: bin_vals(ry, bi, 'id') };
+                }
+            }
+            split_slider.title = 'Split (' + split_val + ')';
             plot_title.text = 'trappytv \u2014 ' + scopeid + ' \u2014 split ' + split_val;
             """,
         )
 
+        self._add_trap(initial_split_val)
         self._add_fov()
         self._finalize(
             title=f"trappytv :: {self.scopeid} :: split {initial_split_val}",
@@ -578,7 +677,8 @@ class TrappyTV(TrappyCore):
 
         A static grey line spans all data; the scatter (and side panels) show
         every ``sample``-th row and respond to interactive selection.
-        The split slider and checkboxes are disabled in this mode.
+        The split slider is disabled in this mode. Filtered-column overlay
+        checkboxes are active (overlays are drawn from the sampled df, static).
 
         Parameters
         ----------
@@ -591,7 +691,8 @@ class TrappyTV(TrappyCore):
         frame_col = "gframe_"
 
         self._clear_renderers()
-        self.source = ColumnDataSource(self.df[::sample])
+        sampled_df    = self.df[::sample]
+        self.source   = ColumnDataSource(sampled_df)
 
         color = transform(frame_col, self._make_color_mapper(frame_col))
         self._render_glyphs(
@@ -605,11 +706,17 @@ class TrappyTV(TrappyCore):
         self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
         self._render_sides(self.source, frame_col=frame_col, background_df=self.df)
 
-        # Histograms — full-df data ("all" key); split slider is disabled in this
-        # mode so there is no JS callback to wire. The histograms are static here.
-        all_hist_data = self._precompute_split_hists()
-        self._render_hists(all_hist_data, initial_key="all")
+        # Filtered-column overlays — drawn from the sampled df; static in this
+        # mode (no split slider), checkboxes toggle visibility as normal.
+        self._render_filtered_overlays(sampled_df)
 
+        # Histograms — computed from the sampled df for first render;
+        # the selection callback updates them on point selection.
+        bin_info = self._compute_hist_bin_info()
+        self._render_hists(bin_info, sampled_df)
+
+        # Trap boundary — first split only (no slider in view_all).
+        self._add_trap(self.split_values[0] if self.split_values else None)
         # FOV — idempotent; safe to call on every view_all invocation.
         self._add_fov()
 
@@ -617,7 +724,7 @@ class TrappyTV(TrappyCore):
             title=f"trappytv :: {self.scopeid} :: full view (every {sample}th point)",
             hover_columns=hover_columns,
             disable_split_slider=True,
-            disable_checkboxes=True,
+            wire_checkboxes=True,
         )
 
     def view_ensemble(
@@ -691,34 +798,52 @@ class TrappyTV(TrappyCore):
             fig.renderers = []
             fig.scatter(x="x", y="y", source=_blank, alpha=0, size=0)
 
-        # ── Histograms ────────────────────────────────────────────────────────
-        all_hist_data = self._precompute_split_hists()
-        initial_key   = str(int(prep["initial_split"]))
-        hist_sources  = self._render_hists(all_hist_data, initial_key)
+        # ── Filtered-column overlays ──────────────────────────────────────────
+        valid_overlays = self._render_filtered_overlays(initial)
+        overlay_xcols  = [x for _, x, _ in valid_overlays]
+        overlay_ycols  = [y for _, _, y in valid_overlays]
 
-        # ── FOV ───────────────────────────────────────────────────────────────
+        # ── Histograms ────────────────────────────────────────────────────────
+        bin_info     = self._compute_hist_bin_info()
+        hist_sources = self._render_hists(bin_info, initial)
+
+        # ── FOV / Trap ────────────────────────────────────────────────────────
+        # _add_trap handles dict xyr gracefully (returns without rendering).
+        self._add_trap(prep["initial_split"])
         self._add_fov()
 
         # ── Split slider callback ─────────────────────────────────────────────
+        # BUG FIX: pass split_values so JS can convert slider index -> real value.
         split_cb = CustomJS(
             args=dict(
                 display_source=self.display_source,
                 full_source=self.full_source,
                 speed_source=self.speed_source,
                 all_speed=all_speed,
+                split_values=self.split_values,
                 plot_title=self.fig.title,
+                overlay_sources=self.overlay_sources,
+                overlay_xcols=overlay_xcols,
+                overlay_ycols=overlay_ycols,
                 hist_sources=hist_sources,
-                all_hist_data=all_hist_data,
+                hist_specs=self._hist_specs,
+                bin_info=bin_info,
+                trap_source=self.trap_source,
+                xyr_source=self.xyr_source,
+                trap_radius_col=self._trap_radius_col,
+                split_slider=self.split_slider,
             ),
             code="""
-            const split_val = Number(cb_obj.value);
+            const idx       = Math.round(cb_obj.value);
+            const split_val = split_values[idx];
             const split_key = String(Math.round(split_val));
-            const full = full_source.data;
+            const full      = full_source.data;
 
+            // Filter full_source to the selected split.
             const nd = {};
             for (const col of Object.keys(full)) { nd[col] = []; }
             for (let i = 0; i < full['split'].length; i++) {
-                if (Number(full['split'][i]) === split_val) {
+                if (Number(full['split'][i]) === Number(split_val)) {
                     for (const col of Object.keys(full)) { nd[col].push(full[col][i]); }
                 }
             }
@@ -729,15 +854,74 @@ class TrappyTV(TrappyCore):
                 speed_source.data = { xs: sd['xs'], ys: sd['ys'], colors: sd['colors'] };
             }
 
-            // Update pre-computed histogram sources for this split.
-            if (all_hist_data[split_key] !== undefined) {
-                for (let i = 0; i < hist_sources.length; i++) {
-                    if (all_hist_data[split_key][i] !== undefined) {
-                        hist_sources[i].data = all_hist_data[split_key][i];
+            // Update each overlay source from the same filtered dict.
+            for (let i = 0; i < overlay_sources.length; i++) {
+                const xc = overlay_xcols[i];
+                const yc = overlay_ycols[i];
+                overlay_sources[i].data = {
+                    [xc]: nd[xc] !== undefined ? nd[xc] : [],
+                    [yc]: nd[yc] !== undefined ? nd[yc] : [],
+                };
+            }
+
+
+            // Update trap boundary circle to this split.
+            if (trap_source !== null && xyr_source !== null && trap_radius_col !== null) {
+                const xyr = xyr_source.data;
+                const td  = { xc: [], yc: [], radius: [] };
+                if ('split' in xyr) {
+                    for (let i = 0; i < xyr['split'].length; i++) {
+                        if (Number(xyr['split'][i]) === Number(split_val)) {
+                            td.xc.push(xyr['xc'][i]);
+                            td.yc.push(xyr['yc'][i]);
+                            td.radius.push(xyr[trap_radius_col][i]);
+                        }
                     }
+                }
+                if (td.xc.length > 0) trap_source.data = td;
+            }
+            // Recompute histograms in JS from the new split data.
+            // Clear any lingering point selection so indices stay valid.
+            display_source.selected.indices = [];
+
+            function bin_vals(vals, bi, transform) {
+                const top = new Array(bi.n).fill(0); let count = 0;
+                for (let j = 0; j < vals.length; j++) {
+                    let v = Number(vals[j]); if (!isFinite(v)) continue;
+                    if (transform === 'frac') v = v - Math.floor(v);
+                    const b = Math.floor((v - bi.min) / bi.width);
+                    if (b >= 0 && b < bi.n) { top[b]++; count++; }
+                }
+                if (count > 0 && bi.width > 0)
+                    for (let b = 0; b < bi.n; b++) top[b] /= (count * bi.width);
+                return top;
+            }
+
+            for (let i = 0; i < hist_specs.length; i++) {
+                const spec = hist_specs[i];
+                const bi   = bin_info[String(i)];
+                const hsrc = hist_sources[i];
+                if (!bi) continue;
+
+                if (spec.type === 'subpix') {
+                    if (!(spec.col in nd)) continue;
+                    hsrc.data = { left: bi.left, right: bi.right,
+                                  top: bin_vals(nd[spec.col], bi, 'frac') };
+
+                } else if (spec.type === 'residual') {
+                    if (!(spec.xraw in nd) || !(spec.xfilt in nd)) continue;
+                    const xr = nd[spec.xraw],  xf = nd[spec.xfilt];
+                    const yr = nd[spec.yraw],  yf = nd[spec.yfilt];
+                    const rx = new Array(xr.length), ry = new Array(yr.length);
+                    for (let j = 0; j < xr.length; j++) rx[j] = Number(xr[j]) - Number(xf[j]);
+                    for (let j = 0; j < yr.length; j++) ry[j] = Number(yr[j]) - Number(yf[j]);
+                    hsrc.data = { left: bi.left, right: bi.right,
+                                  xtop: bin_vals(rx, bi, 'id'),
+                                  ytop: bin_vals(ry, bi, 'id') };
                 }
             }
 
+            split_slider.title = 'Split (' + split_val + ')';
             plot_title.text = 'trappytv \u2014 ensemble \u2014 split ' + split_key;
             """,
         )
@@ -746,13 +930,16 @@ class TrappyTV(TrappyCore):
         base     = list(hover_columns or [])
         combined = (base + [c for c in extra if c not in base]) or None
 
-        self.frame_col = frame_col   # stored for _wire_side_selects in _finalize
+        self.frame_col              = frame_col  # stored for _wire_side_selects in _finalize
+        self.split_no               = 0
+        self.split_slider.value     = 0
+        self.split_slider.title     = f"Split ({prep['initial_split']})"
 
         self._finalize(
-            title=f"trappytv :: {self.scopeid} :: ensemble :: split {self.split_no}",
+            title=f"trappytv :: {self.scopeid} :: ensemble :: split {prep['initial_split']}",
             hover_columns=combined,
             split_callback=split_cb,
-            disable_checkboxes=True,
+            wire_checkboxes=True,
         )
 
     # ── Ensemble data preparation ─────────────────────────────────────────────
@@ -838,193 +1025,387 @@ class TrappyTV(TrappyCore):
             "init_speed":    init_speed,
         }
 
-    def _precompute_split_hists(self) -> dict:
+    def _compute_hist_bin_info(self) -> dict:
         """
-        Pre-compute VBar data for every split (and the full df under key "all").
+        Compute bin edges for each histogram spec (one pass, fast).
 
-        The output is a plain Python dict that Bokeh's CustomJS serialiser can
-        embed directly into a JS callback, exactly as ``all_speed`` is handled
-        in view_ensemble.
+        Sub-pixel bias specs use fixed [0, 1) edges (no df scan needed).
+        Residual specs derive edges from the 1st–99th percentile of the
+        combined x+y residuals over the full dataframe.
 
-        Returns
-        -------
-        all_hist_data : dict
-            ``{split_key: [data_dict_per_hist_fig, ...]}``.
-            *split_key* is ``str(int(split_val))`` or ``"all"``.
-            Each inner list has exactly ``self._n_hists`` entries; unused figures
-            receive empty arrays so the JS update loop stays uniform.
-
-        Data dict shapes
-        ----------------
-        Figures 0 & 1 (subpixel bias):   ``{bins: [...], top: [...]}``
-        Figures 2 +   (filter residuals): ``{xbins:[…], xtop:[…], ybins:[…], ytop:[…]}``
+        Returns ``{str(i): {left, right, min, width, n}}`` keyed by spec index
+        so the JS callbacks can look up the right edges for each figure.
         """
-        from .extraplots import subpix_hist, residual_hist
+        if not self._compute_hists or not self.hist_figs:
+            return {}
 
-        # Detect unrefined / raw position columns (new spec name first).
-        x_base = next((c for c in ("x_ur", "x_unrefined") if c in self.columns), None)
-        y_base = next((c for c in ("y_ur", "y_unrefined") if c in self.columns), None)
+        n_subpix   = 10
+        n_residual = 40
+        bin_info: dict = {}
 
-        # Valid filtered-column pairs available in self.df.
-        valid_fc = [
-            (label, cols[0], cols[1])
-            for label, cols in self.filtered_columns.items()
-            if cols[0] in self.columns and cols[1] in self.columns
-        ]
+        for i, spec in enumerate(self._hist_specs):
+            key = str(i)
+            if spec["type"] == "subpix":
+                w = 1.0 / n_subpix
+                edges = np.linspace(0.0, 1.0, n_subpix + 1)
+                bin_info[key] = {
+                    "left":  edges[:-1].tolist(),
+                    "right": edges[1:].tolist(),
+                    "min":   0.0,
+                    "width": w,
+                    "n":     n_subpix,
+                }
+            elif spec["type"] == "residual":
+                try:
+                    needed = [spec["xraw"], spec["yraw"], spec["xfilt"], spec["yfilt"]]
+                    clean  = self.df[needed].dropna()
+                    rx = clean[spec["xraw"]].to_numpy() - clean[spec["xfilt"]].to_numpy()
+                    ry = clean[spec["yraw"]].to_numpy() - clean[spec["yfilt"]].to_numpy()
+                    combined = np.concatenate([rx, ry])
+                    finite   = combined[np.isfinite(combined)]
+                    if len(finite) < 2:
+                        continue
+                    q1, q99 = np.percentile(finite, [1, 99])
+                    # Robust range: if the 1–99 percentile range is degenerate
+                    # (e.g. filter barely moves from raw), widen to full extent
+                    # with a small padding so all data still gets a bin.
+                    if abs(q99 - q1) < 1e-10:
+                        lo, hi = float(finite.min()), float(finite.max())
+                        if lo == hi:          # truly constant residuals
+                            lo, hi = lo - 0.5, hi + 0.5
+                    else:
+                        lo, hi = float(q1), float(q99)
+                    _, edges = np.histogram(finite, bins=n_residual, range=(lo, hi))
+                    w = float(edges[1] - edges[0])
+                    bin_info[key] = {
+                        "left":  edges[:-1].tolist(),
+                        "right": edges[1:].tolist(),
+                        "min":   float(edges[0]),
+                        "width": w,
+                        "n":     n_residual,
+                    }
+                except Exception:
+                    pass
 
-        # Build per-split sub-frames plus the "all" frame.
-        if "split" in self.df.columns:
-            groups: dict = {str(int(s)): self.df[self.df["split"] == s]
-                            for s in self.split_values}
-        else:
-            groups = {}
-        groups["all"] = self.df
+        return bin_info
 
-        # ── Helper functions ──────────────────────────────────────────────────
-        def _subpix(col: str, sub) -> dict:
-            try:
-                arr = sub[col].dropna().to_numpy(dtype=float)
-                top, bins = subpix_hist(arr)
-                return dict(bins=list(bins), top=list(top))
-            except Exception:
-                return dict(bins=[], top=[])
-
-        def _residual(xf_col: str, yf_col: str, sub) -> dict:
-            try:
-                needed = [x_base, y_base, xf_col, yf_col]
-                clean  = sub[needed].dropna()
-                rx = clean[x_base].to_numpy() - clean[xf_col].to_numpy()
-                ry = clean[y_base].to_numpy() - clean[yf_col].to_numpy()
-                hx, bx = residual_hist(rx)
-                hy, by = residual_hist(ry)
-                return dict(xbins=list(bx), xtop=list(hx), ybins=list(by), ytop=list(hy))
-            except Exception:
-                return dict(xbins=[], xtop=[], ybins=[], ytop=[])
-
-        _empty_sub = dict(bins=[], top=[])
-        _empty_res = dict(xbins=[], xtop=[], ybins=[], ytop=[])
-
-        # ── Compute ───────────────────────────────────────────────────────────
-        all_hist_data: dict = {}
-        for key, sub in groups.items():
-            fig_data: list = []
-
-            # fig 0 — subpixel bias x
-            fig_data.append(_subpix(x_base, sub) if x_base else _empty_sub.copy())
-
-            # fig 1 — subpixel bias y
-            fig_data.append(_subpix(y_base, sub) if y_base else _empty_sub.copy())
-
-            # fig 2 … — residuals per valid filtered column
-            for i, (_, xf_col, yf_col) in enumerate(valid_fc):
-                if 2 + i >= self._n_hists:
-                    break
-                if x_base and y_base:
-                    fig_data.append(_residual(xf_col, yf_col, sub))
-                else:
-                    fig_data.append(_empty_res.copy())
-
-            # Pad to self._n_hists so the JS update loop can index uniformly.
-            while len(fig_data) < self._n_hists:
-                fig_data.append(_empty_sub.copy())
-
-            all_hist_data[key] = fig_data
-
-        return all_hist_data
-
-    def _render_hists(self, all_hist_data: dict, initial_key: str) -> list:
+    def _render_hists(self, bin_info: dict, initial_df) -> list:
         """
-        Clear hist_figs and populate them from pre-computed data, using
-        .vbar(..., source=) so that each figure's ColumnDataSource can be
-        updated from a JS split-slider callback without a Python round-trip.
+        Render the initial histogram for ``initial_df`` and store sources.
 
-        Parameters
-        ----------
-        all_hist_data : dict
-            Output of _precompute_split_hists().
-        initial_key : str
-            The split key (e.g. "0" or "all") whose data to display first.
+        Sub-pixel bias figures get one ``quad`` glyph (``{left, right, top}``).
+        Residual figures get two overlapping ``quad`` glyphs sharing the same
+        bins (``{left, right, xtop, ytop}``): x-residual in blue, y in orange.
 
-        Returns
-        -------
-        hist_sources : list[ColumnDataSource]
-            One source per hist_fig.  Store these on self and pass them (along
-            with all_hist_data) to the split-slider CustomJS callback.
+        ``bin_info`` is the output of ``_compute_hist_bin_info()`` (keyed by
+        spec index string).  Stored as ``self._hist_bin_info_js`` for the
+        selection callback wired in ``_finalize``.
         """
-        from bokeh.palettes import Dark2_5 as palette
+        if not self._compute_hists or not self.hist_figs:
+            self.hist_sources      = []
+            self._hist_bin_info_js = {}
+            return []
 
-        x_base = next((c for c in ("x_ur", "x_unrefined") if c in self.columns), None)
-        y_base = next((c for c in ("y_ur", "y_unrefined") if c in self.columns), None)
+        self._hist_bin_info_js = bin_info
 
-        valid_fc = [
-            (label, cols[0], cols[1])
-            for label, cols in self.filtered_columns.items()
-            if cols[0] in self.columns and cols[1] in self.columns
-        ]
+        _subpix_color  = "#b3de69"
+        _resid_x_color = "#377eb8"   # blue  — x residual
+        _resid_y_color = "#e41a1c"   # red   — y residual
+        _empty_sub = {"left": [], "right": [], "top": []}
+        _empty_res = {"left": [], "right": [], "xtop": [], "ytop": []}
 
-        # Use the requested initial key, fall back to "all".
-        initial_data = all_hist_data.get(initial_key, all_hist_data.get("all", []))
+        def _density(counts: np.ndarray, bin_width: float) -> list:
+            """Normalise raw bin counts to probability density, returning zeros
+            (not NaN) when the array is empty or all-zero."""
+            total = counts.sum()
+            if total > 0 and bin_width > 0:
+                return (counts / (total * bin_width)).tolist()
+            return [0.0] * len(counts)
 
         hist_sources: list = []
+        for i, (fig, spec) in enumerate(zip(self.hist_figs, self._hist_specs)):
+            fig.renderers  = []
+            fig.y_range.start = 0
+            key = str(i)
+            bi  = bin_info.get(key)
 
-        for i, fig in enumerate(self.hist_figs):
-            fig.renderers = []          # clear any previous render
+            if spec["type"] == "subpix":
+                col = spec["col"]
+                if bi and col in initial_df.columns:
+                    arr  = initial_df[col].dropna().to_numpy(dtype=float)
+                    frac = arr % 1
+                    frac = frac[np.isfinite(frac)]
+                    edges  = np.array(bi["left"] + [bi["right"][-1]])
+                    counts, _ = np.histogram(frac, bins=edges)
+                    init = {"left": bi["left"], "right": bi["right"],
+                            "top": _density(counts, bi["width"])}
+                else:
+                    init = _empty_sub.copy()
+                source = ColumnDataSource(init)
+                fig.quad(left="left", right="right", top="top", bottom=0,
+                         fill_color=_subpix_color, fill_alpha=0.8,
+                         line_color="white", source=source)
 
-            init   = initial_data[i] if i < len(initial_data) else {}
-            source = ColumnDataSource(init)
+            else:  # residual
+                xraw, yraw   = spec["xraw"],  spec["yraw"]
+                xfilt, yfilt = spec["xfilt"], spec["yfilt"]
+                if bi and all(c in initial_df.columns for c in [xraw, yraw, xfilt, yfilt]):
+                    clean  = initial_df[[xraw, yraw, xfilt, yfilt]].dropna()
+                    rx     = clean[xraw].to_numpy()  - clean[xfilt].to_numpy()
+                    ry     = clean[yraw].to_numpy()  - clean[yfilt].to_numpy()
+                    edges  = np.array(bi["left"] + [bi["right"][-1]])
+                    cx, _  = np.histogram(rx, bins=edges)
+                    cy, _  = np.histogram(ry, bins=edges)
+                    init   = {"left": bi["left"], "right": bi["right"],
+                              "xtop": _density(cx, bi["width"]),
+                              "ytop": _density(cy, bi["width"])}
+                else:
+                    init = _empty_res.copy()
+                source = ColumnDataSource(init)
+                # Both as solid semi-transparent fills so they're always visible.
+                # Overlap region blends to purple, indicating x ≈ y distributions.
+                fig.quad(left="left", right="right", top="xtop", bottom=0,
+                         fill_color=_resid_x_color, fill_alpha=0.6,
+                         line_color=None, source=source)
+                fig.quad(left="left", right="right", top="ytop", bottom=0,
+                         fill_color=_resid_y_color, fill_alpha=0.4,
+                         line_color=None, source=source)
+
+            fig.title.text = spec["title"]
             hist_sources.append(source)
-
-            if i == 0 and x_base:
-                fig.vbar(x="bins", top="top", bottom=0, width=0.08,
-                         fill_color="#b3de69", source=source)
-                fig.title.text       = f"subpix_bias({x_base})"
-                fig.x_range.bounds   = (0, 1)
-
-            elif i == 1 and y_base:
-                fig.vbar(x="bins", top="top", bottom=0, width=0.08,
-                         fill_color="#b3de69", source=source)
-                fig.title.text       = f"subpix_bias({y_base})"
-                fig.x_range.bounds   = (0, 1)
-
-            elif 2 <= i < 2 + len(valid_fc):
-                label = valid_fc[i - 2][0]
-                fig.vbar(x="xbins", top="xtop", bottom=0, width=0.01,
-                         fill_color=palette[0], fill_alpha=0.3, line_color=None,
-                         source=source)
-                fig.vbar(x="ybins", top="ytop", bottom=0, width=0.01,
-                         fill_color=palette[1], fill_alpha=0.3, line_color=None,
-                         source=source)
-                fig.title.text = f"residual: {label}"
-
-            # else: blank placeholder — leave fig.renderers empty
 
         self.hist_sources = hist_sources
         return hist_sources
 
+    def _wire_hist_selection(self) -> None:
+        """
+        Wire ``self.source.selected`` so that lasso/box selection updates the
+        histogram row in real time.
+
+        Sub-pixel bias: bins the fractional part of the raw column for selected
+        points (or all points when selection is cleared).
+
+        Residual: bins ``raw - filtered`` for the selected points; updates both
+        x (blue) and y (red) bars in the residual figures.
+
+        Clears any previous callback first to avoid stacking on re-renders.
+        """
+        if not self._compute_hists or not self.hist_sources or not self._hist_bin_info_js:
+            return
+        if not self._hist_specs:
+            return
+
+        self.source.selected.js_property_callbacks.pop("change:indices", None)
+
+        sel_cb = CustomJS(
+            args=dict(
+                source=self.source,
+                hist_sources=self.hist_sources,
+                hist_specs=self._hist_specs,
+                bin_info=self._hist_bin_info_js,
+            ),
+            code="""
+            const indices = cb_obj.indices;
+            const data    = source.data;
+            const use_all = (indices.length === 0);
+
+            function extract(col, indices, use_all, data) {
+                if (!(col in data)) return [];
+                const all = data[col];
+                if (use_all) return all;
+                const out = new Array(indices.length);
+                for (let k = 0; k < indices.length; k++) out[k] = all[indices[k]];
+                return out;
+            }
+
+            function bin_vals(vals, bi, transform) {
+                // transform: "id" | "frac"
+                const top = new Array(bi.n).fill(0); let count = 0;
+                for (let j = 0; j < vals.length; j++) {
+                    let v = Number(vals[j]); if (!isFinite(v)) continue;
+                    if (transform === "frac") v = v - Math.floor(v);
+                    const b = Math.floor((v - bi.min) / bi.width);
+                    if (b >= 0 && b < bi.n) { top[b]++; count++; }
+                }
+                if (count > 0 && bi.width > 0)
+                    for (let b = 0; b < bi.n; b++) top[b] /= (count * bi.width);
+                return top;
+            }
+
+            for (let i = 0; i < hist_specs.length; i++) {
+                const spec = hist_specs[i];
+                const bi   = bin_info[String(i)];
+                const src  = hist_sources[i];
+                if (!bi) continue;
+
+                if (spec.type === "subpix") {
+                    const vals = extract(spec.col, indices, use_all, data);
+                    const top  = bin_vals(vals, bi, "frac");
+                    src.data   = { left: bi.left, right: bi.right, top: top };
+
+                } else if (spec.type === "residual") {
+                    if (!(spec.xraw in data) || !(spec.xfilt in data)) continue;
+                    const xr = extract(spec.xraw,  indices, use_all, data);
+                    const xf = extract(spec.xfilt, indices, use_all, data);
+                    const yr = extract(spec.yraw,  indices, use_all, data);
+                    const yf = extract(spec.yfilt, indices, use_all, data);
+                    // compute residuals inline
+                    const rx = new Array(xr.length), ry = new Array(yr.length);
+                    for (let j = 0; j < xr.length; j++) rx[j] = Number(xr[j]) - Number(xf[j]);
+                    for (let j = 0; j < yr.length; j++) ry[j] = Number(yr[j]) - Number(yf[j]);
+                    const xtop = bin_vals(rx, bi, "id");
+                    const ytop = bin_vals(ry, bi, "id");
+                    src.data = { left: bi.left, right: bi.right, xtop: xtop, ytop: ytop };
+                }
+            }
+            """,
+        )
+        self.source.selected.js_on_change("indices", sel_cb)
+
+
+    def _add_trap(self, initial_split_val=None) -> None:
+        """
+        Render the trap boundary circle from ``self.xyr`` (single-cell mode only).
+
+        The radius column is resolved in priority order:
+          1. ``self.trap_radius_col`` (set by the ``trap_radius_col`` constructor arg,
+             default ``"rout"``)
+          2. Fallbacks: ``"rout"``, ``"reff"``, ``"r"`` — first one present wins
+
+        ``trap_source`` uses the normalised key ``"radius"`` regardless of which
+        column was resolved, so the ``Circle`` glyph and JS callbacks always reference
+        ``"radius"`` and never need to know the actual column name.
+        ``xyr_source`` holds the full DataFrame (tiny — one row per split) for the
+        JS split-slider callbacks; ``self._trap_radius_col`` records the resolved name
+        so the callbacks know which column to read from ``xyr_source``.
+
+        Safe to call on every view render — always removes the old renderer first.
+
+        Does nothing when:
+          - ``self.xyr`` is None or a dict (ensemble mode)
+          - ``xc`` / ``yc`` are missing
+          - no usable radius column is found
+        """
+        # Remove any existing trap renderer so we start fresh each view call.
+        if self.trap_renderer is not None and self.trap_renderer in self.fig.renderers:
+            self.fig.renderers.remove(self.trap_renderer)
+        self.trap_renderer     = None
+        self.trap_source       = None
+        self.xyr_source        = None
+        self._trap_radius_col  = None  # resolved column name for JS callbacks
+
+        xyr = self.xyr
+        if xyr is None or not hasattr(xyr, "columns"):
+            return  # None or dict (ensemble) — skip
+
+        if not {"xc", "yc"}.issubset(set(xyr.columns)):
+            return
+
+        # ── Resolve radius column ─────────────────────────────────────────────
+        _fallbacks = ["rout", "reff", "r"]
+        candidates = [self.trap_radius_col] + [c for c in _fallbacks
+                                                if c != self.trap_radius_col]
+        rad_col = next((c for c in candidates if c in xyr.columns), None)
+        if rad_col is None:
+            return  # no usable radius column
+        self._trap_radius_col = rad_col
+
+        # ── Initial row for this split ────────────────────────────────────────
+        if initial_split_val is not None and "split" in xyr.columns:
+            row = xyr[xyr["split"] == initial_split_val]
+            if row.empty:
+                row = xyr.head(1)
+        else:
+            row = xyr.head(1)
+
+        # Normalise radius key to "radius" so glyphs/JS never need the real name.
+        self.trap_source = ColumnDataSource({
+            "xc":     row["xc"].tolist(),
+            "yc":     row["yc"].tolist(),
+            "radius": row[rad_col].tolist(),
+        })
+
+        # ── Full xyr source for JS split-slider callbacks ─────────────────────
+        keep = [c for c in ("xc", "yc", rad_col, "split") if c in xyr.columns]
+        self.xyr_source = ColumnDataSource(xyr[keep])
+
+        # ── Render ────────────────────────────────────────────────────────────
+        # Use Circle glyph model directly so radius is in data coordinates.
+        glyph = Circle(
+            x="xc", y="yc",
+            radius="radius",
+            fill_color=None,
+            line_color="orange",
+            line_width=2,
+            line_dash=[6, 3],
+        )
+        renderer = self.fig.add_glyph(self.trap_source, glyph)
+        renderer.level   = "overlay"
+        renderer.visible = True
+        self.trap_renderer = renderer
+
     def _add_fov(self):
         """
-        Add the FOV image to self.fig exactly once (idempotent).
+        Add FOV image(s) to self.fig (idempotent).
 
-        On first call the image glyph is created with ``visible=False``; the
-        "FOV image" checkbox (wired in _finalize via _wire_trap_fov_checkboxes)
-        toggles it.  Because the renderer is static and not connected to any
-        ColumnDataSource, the split slider — which only mutates
-        display_source.data — can never trigger a re-render.
+        Single-cell mode (self.fov is np.ndarray):
+            One hidden image renderer stored in self.fov_renderer.
 
-        Subsequent calls return the cached renderer without touching self.fig.
+        Ensemble mode (self.fov is dict[eid, np.ndarray]):
+            One hidden image renderer per eid, stored in self._fov_renderers_dict.
+            self.fov_select is populated with eid names so the user can pick which
+            scope's FOV to show.  self.fov_renderer is set to None in this mode —
+            fov_select + trap_fov_checkboxes control individual renderers.
 
-        Returns
-        -------
-        renderer : GlyphRenderer or None
+        Subsequent calls are no-ops if renderers are already attached to self.fig.
         """
-        # Already in the figure — return the cached handle.
-        existing = getattr(self, "fov_renderer", None)
-        if existing is not None and existing in self.fig.renderers:
-            return existing
-
         if self.fov is None:
             self.fov_renderer = None
             return None
+
+        # ── Ensemble mode ─────────────────────────────────────────────────────
+        if isinstance(self.fov, dict):
+            # Already built for this figure — nothing to do.
+            if self._fov_renderers_dict and all(
+                r in self.fig.renderers for r in self._fov_renderers_dict.values()
+            ):
+                return self._fov_renderers_dict
+
+            # Remove stale renderers from a previous view call.
+            for r in list(self._fov_renderers_dict.values()):
+                if r in self.fig.renderers:
+                    self.fig.renderers.remove(r)
+            self._fov_renderers_dict = {}
+
+            for eid, img_arr in self.fov.items():
+                img = img_arr.astype(float)
+                h, w = img.shape[:2]
+                color_mapper = LinearColorMapper(
+                    low=float(img.min()), high=float(img.max()), palette="Greys256"
+                )
+                renderer = self.fig.image(
+                    image=[img], x=0, y=0, dw=w, dh=h,
+                    color_mapper=color_mapper,
+                    level="image",
+                    visible=False,
+                )
+                self._fov_renderers_dict[str(eid)] = renderer
+
+            self.fov_renderer = None  # controlled via fov_select, not directly
+
+            if self._fov_renderers_dict:
+                keys = list(self._fov_renderers_dict.keys())
+                self.fov_select.options  = keys
+                self.fov_select.value    = keys[0]
+                self.fov_select.disabled = False
+                self.fov_select.visible  = True
+
+            return self._fov_renderers_dict
+
+        # ── Single-cell mode ──────────────────────────────────────────────────
+        existing = getattr(self, "fov_renderer", None)
+        if existing is not None and existing in self.fig.renderers:
+            return existing
 
         img = self.fov.astype(float)
         h, w = img.shape[:2]
@@ -1036,7 +1417,7 @@ class TrappyTV(TrappyCore):
             image=[img], x=0, y=0, dw=w, dh=h,
             color_mapper=color_mapper,
             level="image",
-            visible=False,   # hidden until the user enables the checkbox
+            visible=False,
         )
         self.fov_renderer = renderer
         return renderer

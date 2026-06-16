@@ -133,7 +133,9 @@ class CellView:
         """HDF key is always 'df' (§5.1 line 4). No fallback — a missing key
         means the file is malformed."""
         try:
-            self.dfs["tracks"] = pd.read_hdf(self.hdf_path, key="tracks")
+            self.dfs["all_tracks"] = pd.read_hdf(self.hdf_path, key="tracks")
+            ## Excluded failed splits
+            self.dfs["tracks"] = self.dfs["all_tracks"][~self.dfs["all_tracks"].failed_split]
             self._log("LOAD", f"tracks loaded ({len(self.dfs['tracks'])} rows)")
         except Exception as e:
             self._log("ERROR", f"tracks failed: {e}")
@@ -310,5 +312,20 @@ class CellView:
         self.dfs["tracks"] = df[keep]
         self._log("TRIM", f"kept={keep}")
 
-    def __call__(self):
-        return self.dfs.get("tracks")
+    def __call__(self, reliable=True, high_ep_filter=True, exclude_boundary=False, r_um_threshold=1.3, speed_col="speed"):
+        """ Comes with three-sets of filters:
+            1. reliable: exclude large positioning errors and missing tracks.
+            2. high_ep_filter: Exclude splits where the median positioning error is more than the median speed.
+            3. exclude_boundary [default is False]: Exclude events which are within the boundary thresholds.
+        """
+        df = self.dfs.get("tracks").copy()
+        if reliable:
+            df = df[~df.postprocess.isin(None, "large_disp")]
+
+        if high_ep_filter: ## Excludes splits which are not high-ep-errors
+            high_ep = df.groupby("split").apply(lambda g: g[speed_col].median() < g["ep_unrefined"].median())
+            df["high_ep_errors"] = df["split"].map(high_ep)
+            df = df[~df["high_ep_errors"]]
+        if exclude_boundary:
+            df = df[df.r_um < r_um_threshold]
+        return df

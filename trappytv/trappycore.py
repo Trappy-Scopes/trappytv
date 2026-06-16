@@ -35,6 +35,8 @@ from bokeh.models import (
     CustomJS,
     Div,
     LinearColorMapper,
+    MetricLength,
+    ScaleBar,
     Select,
     Slider,
     Spacer,
@@ -115,8 +117,10 @@ class TrappyCore:
         default_xycols: Sequence[str] = ("x", "y"),
         filtered_columns: dict = {},
         side_cols: Sequence[Tuple[str, str]] = _DEFAULT_SIDE_COLS,
-        hist_cols: Optional[Sequence[str]] = None,
         n_hists: int = 5,
+        compute_hists: bool = True,
+        trap_radius_col: str = "rout",
+        scale_bar_unit: Optional[str] = None,
     ) -> None:
         # ── 1. Data ───────────────────────────────────────────────────────────
         self._load_cell(cell)
@@ -134,19 +138,30 @@ class TrappyCore:
         self.filtered_columns = dict(filtered_columns)
         self.side_cols = list(side_cols)
 
-        # Histogram column names: default to the first n_hists numeric columns.
+        # Whether to build and populate the histogram row.
+        # Set False to skip expensive per-split histogram pre-computation.
+        self._compute_hists: bool = compute_hists
+
+        # Unit for the scale bar drawn on the main figure (passed to ScaleBar).
+        # Typical values: "um" (micrometres), "nm", "mm".
+        self._scale_bar_unit: str = scale_bar_unit
+
+        # Preferred radius column for the trap boundary circle.
+        # _add_trap() will try this first, then fall through _TRAP_RADIUS_FALLBACKS.
+        self.trap_radius_col: str = trap_radius_col
+
+        # Histogram figure specs — one dict per figure, describing type and columns.
+        # Built by _build_hist_specs() which must run after self.filtered_columns is set.
+        # Empty list when compute_hists=False.
         self._n_hists = n_hists
-        if hist_cols is not None:
-            self._hist_cols: list[str] = list(hist_cols)[:n_hists]
-        else:
-            numeric_cols = [
-                c for c in self.columns
-                if self.df[c].dtype.kind in "iufcb"
-            ]
-            self._hist_cols = numeric_cols[:n_hists]
+        self._build_hist_specs()
 
         # frame_col is set by each view method before _finalize; initialise here.
         self.frame_col: str = "gframe_"
+
+        # Ensemble FOV renderers: populated by _add_fov when self.fov is a dict.
+        # Maps eid -> GlyphRenderer; empty for single-cell mode.
+        self._fov_renderers_dict: dict = {}
 
         # Total pixel height of the left-column widget rows above self.fig.
         _has_overlay = bool(filtered_columns)
@@ -168,10 +183,11 @@ class TrappyCore:
         #
         # Falls back to height // 3 when no side panels are defined.
         n_side = len(side_cols)
+        hist_h = _H_HIST if compute_hists else 0
         if n_side > 0:
             self._figs_height = max(
                 80,
-                (self._controls_h + height - _H_TEXT_INFO - _H_HIST) // n_side
+                (self._controls_h + height - _H_TEXT_INFO - hist_h) // n_side
                 - _H_PANEL_CTRL,
             )
         else:
@@ -209,9 +225,74 @@ class TrappyCore:
         # Persists across view-mode switches; the split slider never touches it.
         self.fov_renderer = None
 
+        # xyr: trap-centre trajectory loaded from cell.dfs['xyr'].
+        # For single-cell mode this is a DataFrame with xc/yc/reff/split columns.
+        # For ensemble mode it is a dict and is currently ignored for trap rendering.
+        self.xyr = cell.dfs.get('xyr')
+
+        # trap_renderer / trap_source / xyr_source / _trap_radius_col:
+        # all set by _add_trap() on each view call.
+        # Initialised here so the attributes always exist on the object,
+        # even before any view method has been called.
+        self.trap_renderer    = None
+        self.trap_source      = None
+        self.xyr_source       = None
+        self._trap_radius_col = None  # resolved column name (rout / reff / …)
+
         # hist_sources: list of ColumnDataSources, one per hist_fig.
         # Repopulated by _render_hists() on every view call.
         self.hist_sources: list = []
+    # ── Histogram spec builder ──────────────────────────────────────────────────
+
+    def _build_hist_specs(self) -> None:
+        """
+        Build self._hist_specs: one descriptor dict per histogram figure.
+
+        Produces Trappy-Scopes-specific diagnostic figures:
+          Fig 0  : sub-pixel bias of the base x column (x_ur / x_unrefined)
+          Fig 1  : sub-pixel bias of the base y column
+          Fig 2+ : localisation residuals (raw - filtered) per filtered_columns pair
+
+        Only entries whose required columns exist in self.df are included.
+        Total capped at self._n_hists.  Sets self._hist_specs = [] when
+        compute_hists=False.
+        """
+        if not self._compute_hists:
+            self._hist_specs: list = []
+            return
+
+        specs: list = []
+        cols = set(self.df.columns)
+
+        # Detect base raw-position columns (new spec name takes priority).
+        x_base = next((c for c in ("x_ur", "x_unrefined") if c in cols), None)
+        y_base = next((c for c in ("y_ur", "y_unrefined") if c in cols), None)
+
+        if x_base:
+            specs.append({"type": "subpix", "col": x_base,
+                          "title": f"subpix bias ({x_base})"})
+        if y_base:
+            specs.append({"type": "subpix", "col": y_base,
+                          "title": f"subpix bias ({y_base})"})
+
+        # One residual figure per valid filtered_columns pair.
+        for label, xy in self.filtered_columns.items():
+            if len(specs) >= self._n_hists:
+                break
+            xf, yf = xy[0], xy[1]
+            if x_base and y_base and xf in cols and yf in cols:
+                specs.append({
+                    "type":  "residual",
+                    "label": label,
+                    "xraw":  x_base,
+                    "yraw":  y_base,
+                    "xfilt": xf,
+                    "yfilt": yf,
+                    "title": f"residual: {label}",
+                })
+
+        self._hist_specs = specs[:self._n_hists]
+
     # ── Figure factory ────────────────────────────────────────────────────────
 
     def _build_figures(self) -> None:
@@ -227,24 +308,42 @@ class TrappyCore:
             y_axis_label="y",
             output_backend="webgl",
         )
-        # Lock aspect ratio on any zoom tool that supports it.
-        for tool in self.fig.tools:
-            if hasattr(tool, "match_aspect"):
-                tool.match_aspect = True
-
-        # Histogram figures — one per hist_col, laid out as a row in the right
-        # column header. Width divides the right-column budget equally.
-        hist_w = max(80, self._figs_width // self._n_hists)
-        self.hist_figs: list = [
-            figure(
-                width=hist_w,
-                height=_H_HIST,
-                title=col if col else "",
-                toolbar_location=None,
-                output_backend="webgl",
+        # Scale bar — only created when scale_bar_unit is explicitly set.
+        # Leave as None to disable entirely (avoids Bokeh range side-effects).
+        if self._scale_bar_unit is not None:
+            self.scale_bar = ScaleBar(
+                range=self.fig.x_range,
+                unit=self._scale_bar_unit,
+                dimensional=MetricLength(),
+                orientation="horizontal",
+                location="bottom_right",
+                label="@{value} @{unit}",
+                label_location="above",
+                label_align="center",
+                bar_length=0.15,
+                bar_line_width=2,
+                background_fill_alpha=0.8,
             )
-            for col in (self._hist_cols + [""] * (self._n_hists - len(self._hist_cols)))
-        ]
+            self.fig.add_layout(self.scale_bar)
+        else:
+            self.scale_bar = None
+
+        # Histogram figures — created only when compute_hists=True.
+        # One figure per _hist_col; width divides the right-column budget equally.
+        if self._compute_hists and self._hist_specs:
+            hist_w = max(80, self._figs_width // max(1, len(self._hist_specs)))
+            self.hist_figs: list = [
+                figure(
+                    width=hist_w,
+                    height=_H_HIST,
+                    title=spec["title"],
+                    toolbar_location=None,
+                    output_backend="webgl",
+                )
+                for spec in self._hist_specs
+            ]
+        else:
+            self.hist_figs = []
 
         self.side_figs: list = [
             figure(
@@ -286,6 +385,7 @@ class TrappyCore:
         self._build_side_style_sliders()
         self._build_raw_checkboxes()
         self._build_trap_fov_checkboxes()
+        self._build_fov_select()
         self._build_checkboxes()
         self._build_overlay_sliders()
         self._build_logo()
@@ -594,16 +694,36 @@ class TrappyCore:
 
     def _build_trap_fov_checkboxes(self) -> None:
         """
-        Create the trap-boundary / FOV-image toggle checkboxes.
+        Create the trap-boundary / FOV-image / scale-bar toggle checkboxes.
         These sit beside raw_checkboxes in the same row.
         Callbacks are wired by _wire_trap_fov_checkboxes(), called from
-        _finalize() after view-specific renderers (trap circle, fov image)
-        have been added to self.fig by the relevant view method.
-        Both are inactive by default; activate only when renderers exist.
+        _finalize() after view-specific renderers have been added to self.fig.
+
+        Index 0 — Trap boundary  (inactive until a trap renderer is present)
+        Index 1 — FOV image      (inactive until an FOV renderer is present)
+        Index 2 — Scale bar      (always active: scale bar is always rendered)
         """
-        self.trap_fov_checkboxes = CheckboxButtonGroup(
-            labels=["Trap boundary", "FOV image"],
-            active=[],
+        if self.scale_bar is not None:
+            labels = ["Trap boundary", "FOV image", "Scale bar"]
+            active = [2]
+        else:
+            labels = ["Trap boundary", "FOV image"]
+            active = []
+        self.trap_fov_checkboxes = CheckboxButtonGroup(labels=labels, active=active)
+
+    def _build_fov_select(self) -> None:
+        """
+        Create the FOV scopeid selector used in ensemble mode.
+        Starts empty and disabled; _add_fov() populates it when self.fov is a dict.
+        Placed next to trap_fov_checkboxes in the layout.
+        """
+        self.fov_select = Select(
+            title="",
+            value="",
+            options=[],
+            width=120,
+            disabled=True,
+            visible=False,
         )
 
     def _wire_trap_fov_checkboxes(
@@ -613,47 +733,98 @@ class TrappyCore:
     ) -> None:
         """
         Wire trap_fov_checkboxes to toggle trap_renderer (index 0) and
-        fov_renderer (index 1) on self.fig.
+        the FOV image(s) (index 1) on self.fig.
 
-        Parameters
-        ----------
-        trap_renderer : Bokeh renderer, optional
-            The trap-boundary glyph renderer (e.g. an Ellipse or Circle).
-        fov_renderer : Bokeh renderer, optional
-            The FOV image renderer (e.g. an ImageRGBA or ImageURL).
+        Single-cell mode : fov_renderer is a single GlyphRenderer.
+        Ensemble mode    : self._fov_renderers_dict is non-empty; the checkbox
+                           toggles whichever renderer matches fov_select.value.
 
-        If either renderer is None the corresponding checkbox is disabled so
-        the user cannot toggle a non-existent element.
+        If neither renderer is available both checkboxes are disabled.
         """
         self.trap_fov_checkboxes.js_property_callbacks.pop("change:active", None)
 
-        active = []
-        renderers = []
-        if trap_renderer is not None:
-            active.append(0)
-            renderers.append(trap_renderer)
-        if fov_renderer is not None:
-            active.append(1)
-            renderers.append(fov_renderer)
+        has_trap       = trap_renderer is not None
+        has_fov_single = fov_renderer is not None
+        has_fov_dict   = bool(self._fov_renderers_dict)
+        has_fov        = has_fov_single or has_fov_dict
 
-        self.trap_fov_checkboxes.active = active
-        self.trap_fov_checkboxes.disabled = len(renderers) == 0
+        # Index 2 (Scale bar) is always active; 0 and 1 only when renderers exist.
+        active = [2]
+        if has_trap: active.insert(0, 0)
+        if has_fov:  active.insert(-1, 1)  # insert before scale-bar index
 
-        if not renderers:
+        self.trap_fov_checkboxes.active   = sorted(set(active))
+        self.trap_fov_checkboxes.disabled = False  # scale bar always present
+
+        if has_fov_dict:
+            # Ensemble mode: toggle the renderer selected by fov_select.
+            fov_renderers_list = list(self._fov_renderers_dict.values())
+            fov_keys_list      = list(self._fov_renderers_dict.keys())
+            sb_args = {"scale_bar": self.scale_bar} if self.scale_bar is not None else {}
+            sb_js   = "scale_bar.visible = active.has(2);" if self.scale_bar is not None else ""
+            cb = CustomJS(
+                args=dict(
+                    trap=trap_renderer,
+                    fov_renderers=fov_renderers_list,
+                    fov_keys=fov_keys_list,
+                    fov_select=self.fov_select,
+                    **sb_args,
+                ),
+                code=f"""
+                const active  = new Set(cb_obj.active);
+                if (trap !== null) trap.visible = active.has(0);
+                const fov_on  = active.has(1);
+                const sel     = fov_select.value;
+                for (let i = 0; i < fov_renderers.length; i++) {{
+                    fov_renderers[i].visible = fov_on && (fov_keys[i] === sel);
+                }}
+                {sb_js}
+                """,
+            )
+        else:
+            # Single-cell mode: toggle the one fov_renderer directly.
+            sb_args = {"scale_bar": self.scale_bar} if self.scale_bar is not None else {}
+            sb_js   = "scale_bar.visible = active.has(2);" if self.scale_bar is not None else ""
+            cb = CustomJS(
+                args=dict(trap=trap_renderer, fov=fov_renderer, **sb_args),
+                code=f"""
+                const active = new Set(cb_obj.active);
+                if (trap !== null) trap.visible = active.has(0);
+                if (fov  !== null) fov.visible  = active.has(1);
+                {sb_js}
+                """,
+            )
+        self.trap_fov_checkboxes.js_on_change("active", cb)
+
+    def _wire_fov_select(self) -> None:
+        """
+        Wire the fov_select dropdown (ensemble mode) to swap which FOV image is
+        visible.  Only active when self._fov_renderers_dict is populated.
+        Clears any previously attached callbacks first.
+        """
+        self.fov_select.js_property_callbacks.pop("change:value", None)
+
+        if not self._fov_renderers_dict:
             return
+
+        fov_renderers_list = list(self._fov_renderers_dict.values())
+        fov_keys_list      = list(self._fov_renderers_dict.keys())
 
         cb = CustomJS(
             args=dict(
-                trap=trap_renderer,
-                fov=fov_renderer,
+                fov_renderers=fov_renderers_list,
+                fov_keys=fov_keys_list,
+                trap_fov_checkboxes=self.trap_fov_checkboxes,
             ),
             code="""
-            const active = new Set(cb_obj.active);
-            if (trap !== null) trap.visible = active.has(0);
-            if (fov  !== null) fov.visible  = active.has(1);
+            const val    = cb_obj.value;
+            const fov_on = new Set(trap_fov_checkboxes.active).has(1);
+            for (let i = 0; i < fov_renderers.length; i++) {
+                fov_renderers[i].visible = fov_on && (fov_keys[i] === val);
+            }
             """,
         )
-        self.trap_fov_checkboxes.js_on_change("active", cb)
+        self.fov_select.js_on_change("value", cb)
 
     def _build_text_info(self) -> None:
         """
@@ -718,7 +889,7 @@ class TrappyCore:
         left = [
             row(self.logo_div, Spacer(width=20), self.x_select, self.y_select, self.color_select),
             row(self.alpha_slider, self.size_slider, self.split_slider),
-            row(self.raw_checkboxes, self.trap_fov_checkboxes),
+            row(self.raw_checkboxes, self.trap_fov_checkboxes, self.fov_select),
         ]
         if self.checkboxes is not None:
             overlay_row_widgets = [self.checkboxes]
@@ -728,10 +899,9 @@ class TrappyCore:
         left.append(self.fig)
 
         # ── Right column ──────────────────────────────────────────────────────
-        right: list = [
-            self.text_info,
-            row(*self.hist_figs),
-        ]
+        right: list = [self.text_info]
+        if self.hist_figs:
+            right.append(row(*self.hist_figs))
         for size_sl, alpha_sl, sel, fig in zip(
             self.side_size_sliders, self.side_alpha_sliders,
             self.side_selects, self.side_figs,
