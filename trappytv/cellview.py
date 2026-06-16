@@ -320,7 +320,7 @@ class CellView:
         """
         df = self.dfs.get("tracks").copy()
         if reliable:
-            df = df[~df.postprocess.isin(None, "large_disp")]
+            df = df[~df.postprocess.isin([None, "large_disp"])]
 
         if high_ep_filter: ## Excludes splits which are not high-ep-errors
             high_ep = df.groupby("split").apply(lambda g: g[speed_col].median() < g["ep_unrefined"].median())
