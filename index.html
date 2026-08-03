@@ -1,0 +1,1093 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trappy-scopes.github.io/trappytv/">
+      
+      
+      
+        <link rel="next" href="interactive_plots/split_view.html">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Trappy-Scopes/trappytv</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="stylesheets/extra.css">
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="cyan" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#installation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://trappy-scopes.github.io/trappyscopes/" title="Trappy-Scopes/trappytv" class="md-header__button md-logo" aria-label="Trappy-Scopes/trappytv" data-md-component="logo">
+      
+  <img src="assets/tsicon.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Trappy-Scopes/trappytv
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Home
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="cyan" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="cyan" data-md-color-accent="teal"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/Trappy-Scopes/trappytv" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="interactive_plots/split_view.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Split Preview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="interactive_plots/full_view.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Full Preview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="interactive_plots/ensemble_view.html" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Ensemble Preview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="https://trappy-scopes.github.io" class="md-tabs__link">
+        
+  
+  
+    
+  
+  All Trappy-Scopes Projects
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://trappy-scopes.github.io/trappyscopes/" title="Trappy-Scopes/trappytv" class="md-nav__button md-logo" aria-label="Trappy-Scopes/trappytv" data-md-component="logo">
+      
+  <img src="assets/tsicon.png" alt="logo">
+
+    </a>
+    Trappy-Scopes/trappytv
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/Trappy-Scopes/trappytv" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#loading-data-cellview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loading data — CellView
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Loading data — CellView">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#useful-methods-before-visualising" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Useful methods before visualising
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#constructing-trappytv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constructing TrappyTV
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Constructing TrappyTV">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#figs_width-is-not-a-parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        figs_width is not a parameter
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Layout
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Layout">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#histogram-row" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Histogram row
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#view-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        View modes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="View modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#view_split" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        view_split
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view_all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        view_all
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#view_ensemble" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        view_ensemble
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#controls-all-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Controls (all modes)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hover-and-text-info" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hover and text info
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#for-developers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        For developers
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="For developers">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trappycore-responsibilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TrappyCore responsibilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#trappytv-view-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TrappyTV view construction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-a-new-view-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adding a new view mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hover-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hover system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#side-panel-column-selector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Side panel column selector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#known-bugs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known bugs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="interactive_plots/split_view.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Split Preview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="interactive_plots/full_view.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Full Preview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="interactive_plots/ensemble_view.html" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ensemble Preview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://trappy-scopes.github.io" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    All Trappy-Scopes Projects
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+  <h1>Home</h1>
+
+<p>Interactive Bokeh visualisation for <a href="https://trappy-scopes.github.io">Trappy-Scopes</a> trajectory data. Runs inside Jupyter notebooks.</p>
+<p><img src="https://github.com/Trappy-Scopes/trappytv/blob/main/docs/assets/trappytv_logo.png?raw=true"></p>
+<hr />
+<p>A live demo can be found at: <a href="https://trappy-scopes.github.io/trappytv">www.trappy-scopes.github.io/trappytv</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">trappytv</span><span class="w"> </span><span class="kn">import</span> <span class="n">CellView</span><span class="p">,</span> <span class="n">TrappyTV</span>
+
+<span class="n">cell</span> <span class="o">=</span> <span class="n">CellView</span><span class="p">(</span><span class="s2">&quot;path/to/data.hd5&quot;</span><span class="p">)</span>
+<span class="n">tv</span>   <span class="o">=</span> <span class="n">TrappyTV</span><span class="p">(</span><span class="n">cell</span><span class="p">)</span>
+<span class="n">tv</span><span class="o">.</span><span class="n">view_split</span><span class="p">()</span>
+</code></pre></div>
+<hr />
+<h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/Trappy-Scopes/trappytv.git
+</code></pre></div>
+<p>Requires Python ≥ 3.10, Bokeh ≥ 3.0.</p>
+<hr />
+<h2 id="loading-data-cellview">Loading data — <code>CellView</code><a class="headerlink" href="#loading-data-cellview" title="Permanent link">&para;</a></h2>
+<p><code>CellView</code> reads an HDF5 file produced by the Trappy-Scopes postprocessing pipeline. It exposes <code>cell.dfs["tracks"]</code> (the trajectory DataFrame) and optionally <code>cell.fov</code> (first-frame image), <code>cell.metadata</code>, <code>cell.dfs["xyr"]</code> (trap-centre trajectory), and <code>cell.counts</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">cell</span> <span class="o">=</span> <span class="n">CellView</span><span class="p">(</span>
+    <span class="s2">&quot;path/to/data.hd5&quot;</span><span class="p">,</span>           <span class="c1"># or a postprocess/ directory</span>
+    <span class="n">xycols</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x_unrefined&quot;</span><span class="p">,</span> <span class="s2">&quot;y_unrefined&quot;</span><span class="p">),</span>  <span class="c1"># columns used for speed computation</span>
+    <span class="n">compute_speed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>            <span class="c1"># adds a &quot;speed&quot; column via np.gradient per particle</span>
+    <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>                  <span class="c1"># print loading stages to stdout</span>
+    <span class="n">protected_cols</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>           <span class="c1"># extra columns kept by keep_columns()</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Single-cell vs. ensemble is auto-detected from the HDF5 <code>metadata</code> node. In ensemble mode <code>cell.fov</code> is a <code>dict[eid, np.ndarray]</code>; in single-cell mode it is a plain <code>np.ndarray</code>.</p>
+<h3 id="useful-methods-before-visualising">Useful methods before visualising<a class="headerlink" href="#useful-methods-before-visualising" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">cell</span><span class="o">.</span><span class="n">add_columns</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="n">func</span><span class="p">,</span> <span class="n">outputs</span><span class="p">)</span>   <span class="c1"># derive new columns; func receives the full df</span>
+<span class="n">cell</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">func</span><span class="p">)</span>                          <span class="c1"># row-wise boolean filter: func(df) -&gt; bool Series</span>
+<span class="n">cell</span><span class="o">.</span><span class="n">keep_columns</span><span class="p">(</span><span class="n">cols</span><span class="p">)</span>                   <span class="c1"># drop unused columns (protected cols always kept)</span>
+</code></pre></div>
+<p><code>add_columns</code> behaviour: <code>inplace=True</code> (default) means <code>func</code> returns a complete replacement DataFrame; <code>inplace=False</code> means <code>func</code> returns only the new columns, which are merged in by index.</p>
+<hr />
+<h2 id="constructing-trappytv">Constructing <code>TrappyTV</code><a class="headerlink" href="#constructing-trappytv" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">tv</span> <span class="o">=</span> <span class="n">TrappyTV</span><span class="p">(</span>
+    <span class="n">cell</span><span class="p">,</span>
+    <span class="n">width</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span> <span class="n">height</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>           <span class="c1"># main figure pixel size</span>
+    <span class="n">default_xycols</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x_unrefined&quot;</span><span class="p">,</span> <span class="s2">&quot;y_unrefined&quot;</span><span class="p">),</span>
+    <span class="n">filtered_columns</span><span class="o">=</span><span class="p">{</span>                  <span class="c1"># overlay trajectories (view_split only)</span>
+        <span class="s2">&quot;filtered&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;xf&quot;</span><span class="p">,</span>       <span class="s2">&quot;yf&quot;</span>     <span class="p">],</span>
+        <span class="s2">&quot;denoised&quot;</span><span class="p">:</span>     <span class="p">[</span><span class="s2">&quot;xf_11Hz&quot;</span><span class="p">,</span>  <span class="s2">&quot;yf_11Hz&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;anti-aliased&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;xf_3Hz&quot;</span><span class="p">,</span>   <span class="s2">&quot;yf_3Hz&quot;</span> <span class="p">],</span>
+    <span class="p">},</span>
+    <span class="n">side_cols</span><span class="o">=</span><span class="p">[</span>                         <span class="c1"># side panels shown to the right</span>
+        <span class="p">(</span><span class="s2">&quot;speed&quot;</span><span class="p">,</span>  <span class="s2">&quot;Speed&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;signal&quot;</span><span class="p">,</span> <span class="s2">&quot;Signal&quot;</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span>   <span class="s2">&quot;Temp&quot;</span><span class="p">),</span>
+    <span class="p">],</span>
+    <span class="n">hover_builder</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>                 <span class="c1"># callable(columns) -&gt; list[(label, spec)]</span>
+    <span class="n">hover_columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;split&quot;</span><span class="p">,</span> <span class="s2">&quot;frame&quot;</span><span class="p">,</span> <span class="s2">&quot;particle&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>The right-column width equals <code>width</code>; side-panel heights are computed automatically so both columns reach the same total pixel height.</p>
+<h3 id="figs_width-is-not-a-parameter"><code>figs_width</code> is not a parameter<a class="headerlink" href="#figs_width-is-not-a-parameter" title="Permanent link">&para;</a></h3>
+<p>The right column (histograms + side panels) is always <code>width</code> pixels wide. There is no separate <code>figs_width</code> argument.</p>
+<hr />
+<h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
+<p>The widget is a two-column layout:</p>
+<p><strong>Left column</strong> — logo · X/Y/Color dropdowns · Alpha/Size/Split sliders · Raw-glyph and trap/FOV checkboxes · (optional) overlay checkboxes + sliders · main trajectory figure.</p>
+<p><strong>Right column</strong> — text info div · histogram row (5 figures) · per-panel [dropdown + size/alpha sliders + figure] repeated for each side panel.</p>
+<h3 id="histogram-row">Histogram row<a class="headerlink" href="#histogram-row" title="Permanent link">&para;</a></h3>
+<p>Five histogram figures sit above the side panels. The first two show sub-pixel bias (fractional part of <code>x_unrefined</code> / <code>y_unrefined</code>). Figures 3–5 show residuals between raw and each filtered column (e.g. <code>xf − x_unrefined</code>). Histograms update per split alongside the main figure when the split slider moves. Empty histograms are rendered as blank placeholders.</p>
+<hr />
+<h2 id="view-modes">View modes<a class="headerlink" href="#view-modes" title="Permanent link">&para;</a></h2>
+<h3 id="view_split"><code>view_split</code><a class="headerlink" href="#view_split" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">tv</span><span class="o">.</span><span class="n">view_split</span><span class="p">(</span>
+    <span class="n">split_no</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>           <span class="c1"># index into split_values for the initial split</span>
+    <span class="n">xycols</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>          <span class="c1"># overrides default_xycols</span>
+    <span class="n">line_alpha</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span>
+    <span class="n">line_color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">,</span>
+    <span class="n">hover_columns</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Renders one split at a time. The split slider switches between splits live (pure JS). A <code>full_source</code> holding all splits is serialised once; the slider filters it client-side and rewrites the display source.</p>
+<p>Filtered-column overlays (e.g. denoised, anti-aliased) are drawn as static non-interactive line + scatter glyphs. The checkboxes toggle their visibility. Overlay size and alpha are wired interactively via the overlay sliders.</p>
+<hr />
+<h3 id="view_all"><code>view_all</code><a class="headerlink" href="#view_all" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">tv</span><span class="o">.</span><span class="n">view_all</span><span class="p">(</span>
+    <span class="n">sample</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>            <span class="c1"># scatter shows every Nth row; lower = slower</span>
+    <span class="n">xycols</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">line_alpha</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span>
+    <span class="n">line_color</span><span class="o">=</span><span class="s2">&quot;gray&quot;</span><span class="p">,</span>
+    <span class="n">hover_columns</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Renders the full trajectory across all splits. A static grey line spans every point; the interactive scatter shows every <code>sample</code>-th row. The split slider and overlay checkboxes are disabled in this mode. Histograms are computed from the full dataframe.</p>
+<hr />
+<h3 id="view_ensemble"><code>view_ensemble</code><a class="headerlink" href="#view_ensemble" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">tv</span><span class="o">.</span><span class="n">view_ensemble</span><span class="p">(</span>
+    <span class="n">xycols</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;y&quot;</span><span class="p">),</span>
+    <span class="n">smooth_window</span><span class="o">=</span><span class="mi">25</span><span class="p">,</span>      <span class="c1"># rolling average window for per-particle speed</span>
+    <span class="n">exclude_open</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>    <span class="c1"># if True, drops rows where trap_open == True</span>
+    <span class="n">hover_columns</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+<p>Renders all particles across an ensemble. Each <code>(particle, scopeid)</code> pair gets a unique colour per split. The split slider switches the ensemble live. The first side panel shows a rolling-averaged speed trace per particle (rendered as <code>multi_line</code>). Overlay checkboxes are disabled in this mode. Requires <code>scopeid</code> and <code>particle</code> columns in the dataframe.</p>
+<hr />
+<h2 id="controls-all-modes">Controls (all modes)<a class="headerlink" href="#controls-all-modes" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>X / Y dropdowns</td>
+<td>Change the main figure axes</td>
+</tr>
+<tr>
+<td>Color dropdown</td>
+<td>Change the colormap source column</td>
+</tr>
+<tr>
+<td>Alpha / Size sliders</td>
+<td>Main scatter appearance</td>
+</tr>
+<tr>
+<td>Raw line / Raw scatter</td>
+<td>Toggle visibility of the primary glyphs</td>
+</tr>
+<tr>
+<td>Trap boundary / FOV image</td>
+<td>Toggle trap-circle and FOV image overlays</td>
+</tr>
+<tr>
+<td>Split slider</td>
+<td>Switch split (live JS in <code>view_split</code> and <code>view_ensemble</code>)</td>
+</tr>
+<tr>
+<td>Panel dropdowns</td>
+<td>Change the y-column shown in each side panel</td>
+</tr>
+<tr>
+<td>Panel Size / Alpha</td>
+<td>Per-panel scatter appearance (live JS)</td>
+</tr>
+<tr>
+<td>Overlay checkboxes</td>
+<td>Toggle filtered-column overlay visibility (<code>view_split</code> only)</td>
+</tr>
+<tr>
+<td>Overlay Size / Alpha</td>
+<td>Overlay glyph appearance (live JS)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="hover-and-text-info">Hover and text info<a class="headerlink" href="#hover-and-text-info" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">tv</span><span class="o">.</span><span class="n">set_hover_columns</span><span class="p">([</span><span class="s2">&quot;split&quot;</span><span class="p">,</span> <span class="s2">&quot;frame&quot;</span><span class="p">,</span> <span class="s2">&quot;particle&quot;</span><span class="p">])</span>  <span class="c1"># replace hover columns live</span>
+<span class="n">tv</span><span class="o">.</span><span class="n">set_hover_builder</span><span class="p">(</span><span class="n">my_fn</span><span class="p">)</span>                            <span class="c1"># replace the tooltip builder</span>
+<span class="n">tv</span><span class="o">.</span><span class="n">update_text_info</span><span class="p">(</span><span class="s2">&quot;&lt;b&gt;my label&lt;/b&gt; | split 3 | 1200 pts&quot;</span><span class="p">)</span>  <span class="c1"># update the info div</span>
+</code></pre></div>
+<p>The default hover builder auto-selects <code>gframe_</code>, <code>split</code>, <code>x/y</code>, <code>frame</code>, <code>particle</code>, <code>scopeid</code>, and <code>dt</code> (formatted as datetime).</p>
+<hr />
+<h2 id="for-developers">For developers<a class="headerlink" href="#for-developers" title="Permanent link">&para;</a></h2>
+<p>The codebase is split into two files:</p>
+<ul>
+<li><strong><code>trappycore.py</code></strong> — <code>TrappyCore</code>: data loading, figure/widget creation, layout assembly, shared renderer helpers. No view logic.</li>
+<li><strong><code>trappytv.py</code></strong> — <code>TrappyTV(TrappyCore)</code>: hover system, overlay rendering, three view modes, histogram computation.</li>
+<li><strong><code>cellview.py</code></strong> — <code>CellView</code>: HDF5 reader, speed computation, column helpers.</li>
+<li><strong><code>extraplots.py</code></strong> — <code>subpix_hist</code>, <code>residual_hist</code>: histogram helper functions.</li>
+</ul>
+<h3 id="trappycore-responsibilities">TrappyCore responsibilities<a class="headerlink" href="#trappycore-responsibilities" title="Permanent link">&para;</a></h3>
+<p><strong>Data</strong> — <code>_load_cell</code> runs once, renames <code>gframe → gframe_</code>, resolves <code>split_values</code>. <code>self.df</code> is never mutated after this.</p>
+<p><strong>Figures</strong> — <code>_build_figures</code> creates <code>self.fig</code> (main), <code>self.hist_figs</code> (list of 5), and <code>self.side_figs</code>. Placeholder invisible renderers (<code>self.scatter</code>, <code>self.line</code>) are created so wiring methods always have valid targets.</p>
+<p><strong>Widgets</strong> — each widget group has a <code>_build_*</code> method. Build methods only create widget objects — no callbacks.</p>
+<p><strong>Wiring</strong> — each <code>_wire_*</code> method attaches JS callbacks to the <em>current</em> renderers. All wiring clears existing callbacks before adding new ones to prevent stacking across repeated view calls. All wiring runs inside <code>_finalize</code>, called at the end of every view method.</p>
+<p><strong>Layout</strong> — <code>_build_layout</code> assembles the two-column layout. The right-column top spacer height is <code>self._controls_h</code>, derived from module-level <code>_H_*</code> constants shared with the <code>_figs_height</code> calculation.</p>
+<p><strong>Layout height constants</strong> (tune in <code>trappycore.py</code> if alignment is off):</p>
+<div class="highlight"><pre><span></span><code><span class="n">_H_ROW_SELECT</span>   <span class="o">=</span> <span class="mi">60</span>   <span class="c1"># selects row</span>
+<span class="n">_H_ROW_SLIDER</span>   <span class="o">=</span> <span class="mi">60</span>   <span class="c1"># any slider row</span>
+<span class="n">_H_ROW_CHECKBOX</span> <span class="o">=</span> <span class="mi">45</span>   <span class="c1"># CheckboxButtonGroup row</span>
+<span class="n">_H_ROW_OVERLAY</span>  <span class="o">=</span> <span class="mi">60</span>   <span class="c1"># overlay checkboxes + sliders row</span>
+<span class="n">_H_PANEL_CTRL</span>   <span class="o">=</span> <span class="mi">95</span>   <span class="c1"># per-panel control overhead (select + sliders)</span>
+<span class="n">_H_TEXT_INFO</span>    <span class="o">=</span> <span class="mi">50</span>   <span class="c1"># text info div</span>
+<span class="n">_H_HIST</span>         <span class="o">=</span> <span class="mi">140</span>  <span class="c1"># histogram row height</span>
+</code></pre></div>
+<h3 id="trappytv-view-construction">TrappyTV view construction<a class="headerlink" href="#trappytv-view-construction" title="Permanent link">&para;</a></h3>
+<p>Every view method follows the same sequence:</p>
+<ol>
+<li><code>_clear_renderers()</code> — removes <code>self.scatter</code>, <code>self.line</code>, and all overlay renderers; wipes the legend</li>
+<li>Set <code>self.source</code> (and <code>self.full_source</code> if a split slider JS callback is needed)</li>
+<li><code>_make_color_mapper(frame_col)</code> — creates a <code>LinearColorMapper</code> (not called in <code>view_ensemble</code>)</li>
+<li><code>_render_glyphs(...)</code> — draws the main line + scatter; sets <code>self.line</code> and <code>self.scatter</code></li>
+<li><code>_render_sides(...)</code> — populates <code>self.other_scatters</code></li>
+<li><code>_precompute_split_hists()</code> + <code>_render_hists(...)</code> — builds and displays histogram row</li>
+<li>Set <code>self.frame_col</code> (used by <code>_wire_side_selects</code>)</li>
+<li>Build a <code>CustomJS</code> split callback if needed</li>
+<li><code>_finalize(...)</code> — wires all callbacks and calls <code>display()</code></li>
+</ol>
+<h3 id="adding-a-new-view-mode">Adding a new view mode<a class="headerlink" href="#adding-a-new-view-mode" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Add <code>view_&lt;name&gt;(self, ...)</code> following the sequence above.</li>
+<li>Pass <code>wire_checkboxes=True</code> to <code>_finalize</code> if overlay checkboxes should be active.</li>
+<li>Pass <code>disable_checkboxes=True</code> if they should be greyed out.</li>
+<li>The split slider is always present; pass <code>split_callback=None</code> to leave it inert, or <code>disable_split_slider=True</code> to disable it.</li>
+<li>When building a split-slider JS callback, pass <code>split_values=self.split_values</code> as a CustomJS arg and index it with the slider position: <code>const split_val = split_values[Math.round(cb_obj.value)]</code>.</li>
+</ol>
+<h3 id="hover-system">Hover system<a class="headerlink" href="#hover-system" title="Permanent link">&para;</a></h3>
+<p><code>hover_builder(columns)</code> is a callable stored on the instance. Override with <code>set_hover_builder(fn)</code> or pass <code>hover_builder=</code> at construction. <code>_apply_hover</code> updates the existing <code>HoverTool</code> in place so it always points at the current <code>self.scatter</code>.</p>
+<h3 id="side-panel-column-selector">Side panel column selector<a class="headerlink" href="#side-panel-column-selector" title="Permanent link">&para;</a></h3>
+<p><code>_wire_side_selects</code> passes <code>yaxis=fig.yaxis[0]</code> as a direct CustomJS arg (not <code>fig</code>) so that <code>yaxis.axis_label = col</code> is a reliable direct model update.</p>
+<h3 id="known-bugs">Known bugs<a class="headerlink" href="#known-bugs" title="Permanent link">&para;</a></h3>
+<p>See the issue tracker. Major known issues at time of writing:</p>
+<ul>
+<li><code>view_ensemble</code> split slider JS callback does not use <code>split_values</code> for index lookup — produces empty data when split values are not <code>0, 1, 2, ...</code></li>
+<li><code>_add_fov</code> crashes in ensemble mode when <code>self.fov</code> is a dict</li>
+<li><code>_prepare_ensemble</code> requires a <code>scopeid</code> column; single-cell data will raise <code>KeyError</code></li>
+<li><code>_render_sides</code> background line may crash if <code>y_col</code> is missing from <code>background_df</code></li>
+<li><code>_wire_xy_selects</code> passes the whole <code>fig</code> object to JS and indexes <code>fig.xaxis[0]</code> — axis label updates may be unreliable; use direct axis references as <code>_wire_side_selects</code> does</li>
+<li><code>view_ensemble</code> does not update <code>self.split_slider.value</code> or <code>self.split_no</code> to match the displayed split</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.top", "navigation.indexes", "toc.integrate", "search.highlight", "content.code.annotate", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/es-module-shims@1.8.3/dist/es-module-shims.min.js"></script>
+      
+        <script src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
+      
+        <script src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+      
+    
+  </body>
+</html>
