@@ -145,7 +145,7 @@ def detect_outliers_local(
         """
         if idx < 0 or idx >= N:
             return np.nan
-        if postprocess[idx] == "interpolated":
+        if postprocess[idx] == "filled":
             return np.nan
         v = ep[idx]
         return np.nan if np.isnan(v) else v
@@ -317,8 +317,8 @@ def plot_outlier_diagnostics_df(
             zorder=4,
         )
 
-        if "interpolated" in list(postprocess):
-            mask = np.array(postprocess) == "interpolated"
+        if "filled" in list(postprocess):
+            mask = np.array(postprocess) == "filled"
             ax_traj.scatter(
                 xs[mask],
                 ys[mask],
@@ -462,7 +462,7 @@ def interpolate_large_uncertainty(
         local = df.loc[anchor_before:anchor_after, cols_out].copy()
 
         # mask only event region inside local frame
-        local.loc[start:end, cols_out] = np.nan
+        local.loc[start:end, [col for col in cols_out if col != "postprocess"]] = np.nan
 
         # interpolate per column
         #for c in cols_out:
